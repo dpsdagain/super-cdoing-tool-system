@@ -10,6 +10,10 @@ from backend import load_existing_chroma, SQLiteFTS5BM25
 from rag_chain import hybrid_search, get_reranker
 from config import RETRIEVER_K, RERANK_TOP_K, USE_RERANKER, WORKSPACE_ROOT
 
+def tool(func):
+    """Dummy decorator to support @tool syntax without changing registration logic."""
+    return func
+
 logger = logging.getLogger(__name__)
 
 # 🚀 Resource Safety: Global process tracking to prevent orphans on Windows
