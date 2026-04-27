@@ -16,7 +16,7 @@ class DreamEngine:
         os.makedirs(self.memory_dir, exist_ok=True)
         self.memory_file = os.path.join(self.memory_dir, "lessons_learned.md")
 
-    def reflect_and_learn(self, transcript: List[Dict[str, Any]], engine_model: str) -> str:
+    def reflect_and_learn(self, transcript: List[Any], engine_model: str) -> str:
         """
         Simulates the background 'AutoDream' process (autoDream.ts:319).
         In a production system, this would be a hidden LLM call.
@@ -24,12 +24,23 @@ class DreamEngine:
         # Logic: Extract tool failures and user corrections from transcript
         lessons = []
         for turn in transcript:
-            if turn.get("type") == "tool_result" and "Error" in str(turn.get("content")):
-                lessons.append(f"- Avoided error: {str(turn.get('content'))[:100]}...")
+            # Handle both dicts and LangChain objects
+            msg_type = ""
+            msg_content = ""
+            
+            if isinstance(turn, dict):
+                msg_type = turn.get("type", "")
+                msg_content = str(turn.get("content", ""))
+            elif hasattr(turn, "type"):
+                msg_type = turn.type
+                msg_content = str(turn.content)
+            
+            if (msg_type == "tool" or msg_type == "tool_result") and "Error" in msg_content:
+                lessons.append(f"- Avoided error: {msg_content[:100]}...")
             
             # Simple simulation: Extracting patterns from user feedback
-            if turn.get("type") == "user" and ("no" in turn.get("content").lower() or "wrong" in turn.get("content").lower()):
-                lessons.append(f"- User Correction Observed: '{turn.get('content')[:100]}'")
+            if (msg_type == "human" or msg_type == "user") and ("no" in msg_content.lower() or "wrong" in msg_content.lower()):
+                lessons.append(f"- User Correction Observed: '{msg_content[:100]}'")
 
         if not lessons:
             return "No new patterns discovered this turn."

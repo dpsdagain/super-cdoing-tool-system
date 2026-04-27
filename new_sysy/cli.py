@@ -26,6 +26,7 @@ import time
 import os
 import re
 import threading
+import json
 from typing import List, Any, Optional, Dict
 
 # Lazy-loading pointers
@@ -69,6 +70,7 @@ class AgentCLI:
         self.permission_mode = permission_mode
         self.engine = None
         self.is_ready = False
+        self.boot_error = None
         self.history = []
         
         # UI components are loaded only when AgentCLI is instantiated
@@ -107,12 +109,14 @@ class AgentCLI:
                 from tools import cleanup_active_processes
                 atexit.register(cleanup_active_processes)
             
-            self.engine = QueryEngine(model=self.model_id, permission_mode=self.permission_mode)
+            self.engine = QueryEngine(model_id=self.model_id, permission_mode=self.permission_mode)
             self.engine.permission_callback = self.permission_callback
             self.history = self.engine.load_session(self.session_id)
             self.is_ready = True
         except Exception as e:
             # We don't crash the UI thread, just log the error
+            import traceback
+            self.boot_error = f"{str(e)}\n{traceback.format_exc()}"
             logging.error(f"Engine Boot Failed: {e}")
 
     def permission_callback(self, tool_name: str, tool_args: dict) -> bool:
@@ -221,9 +225,19 @@ class AgentCLI:
 
                 # --- ENSURE ENGINE IS READY ---
                 if not self.is_ready:
+                    if self.boot_error:
+                        console.print(f"\n{INDENT}[danger]CRITICAL: Engine failed to boot.[/danger]")
+                        console.print(f"{INDENT}[dim]{self.boot_error}[/dim]\n")
+                        break # Exit the loop and end the session
+
                     with console.status(f"{INDENT}[status]Warming up query engine...[/status]"):
-                        while not self.is_ready:
+                        while not self.is_ready and not self.boot_error:
                             time.sleep(0.1)
+                        
+                        if self.boot_error:
+                            console.print(f"\n{INDENT}[danger]CRITICAL: Engine failed to boot.[/danger]")
+                            console.print(f"{INDENT}[dim]{self.boot_error}[/dim]\n")
+                            break # Exit the loop and end the session
 
                 # --- AGENT TURN ---
                 def run_agent_turn(agent_query, history_msgs):
@@ -266,6 +280,29 @@ class AgentCLI:
                             if active_status: active_status.stop()
                             console.print(f"\n{INDENT}[warning] 🪦 {event['content']} [/]")
                         
+                        elif event["type"] == "permission_request":
+                            if active_status: active_status.stop()
+                            tool = event["tool"]
+                            args = event["args"]
+                            console.print("\n")
+                            console.print(Align.left(Panel(
+                                f"[bold yellow]🛡️ Permission Required:[/bold yellow] Agent wants to run [bold blue]{tool}[/bold blue] with args:\n[dim]{json.dumps(args, indent=2)}[/dim]",
+                                title="Security Gate", box=ROUNDED, border_style="yellow", width=min(console.width - 4, 100)
+                            )))
+                            
+                            choice = self.prompt_session.prompt(
+                                HTML(f'<b><ansiyellow>{USER_ICON} Allow tool execution? (y/n)</ansiyellow></b> > ')
+                            ).strip().lower()
+                            
+                            if choice in ["y", "yes"]:
+                                # Continue the loop with approval
+                                continue
+                            else:
+                                # We need to tell the engine it was denied. 
+                                # For now, we break and the user turn ends.
+                                console.print(f"{INDENT}[danger]Permission Denied by user.[/danger]")
+                                break
+
                         elif event["type"] == "interrupt":
                             if active_status: active_status.stop()
                             interrupted_event = event

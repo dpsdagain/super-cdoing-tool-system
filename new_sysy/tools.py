@@ -291,6 +291,14 @@ def switch_model(model_id: str) -> str:
     """Reboots the agent with a new LLM engine. All conversation context is preserved."""
     return f"[MODEL_SWITCHED] {model_id}"
 
+def update_plan(plan: str) -> str:
+    """Synthetic Tool: Update your internal master plan. Use this to track progress, rejected ideas, and next steps."""
+    return f"[PLAN_UPDATED] {plan}"
+
+def set_status(status: str) -> str:
+    """Sets the current activity status for the TUI (e.g. 'Analyzing index...')."""
+    return f"[STATUS_UPDATED] {status}"
+
 class UpdatePlanInput(BaseModel):
     plan: str = Field(description="The updated step-by-step plan for the current task.")
 
@@ -306,6 +314,10 @@ class NotebookEditInput(BaseModel):
     new_source: str = Field(description="New content for the cell.")
     edit_mode: str = Field(default="replace", description="replace, insert, or delete.")
     cell_type: str = Field(default="code", description="code or markdown.")
+
+# -----------------------------------------------------------------------------
+# TOOL REGISTRY (Extended)
+# -----------------------------------------------------------------------------
 
 class DoctorInput(BaseModel):
     pass
@@ -327,21 +339,9 @@ class GitLogInput(BaseModel):
 
 # -----------------------------------------------------------------------------
 # GIT INTEGRATION (F-34)
-class UpdatePlanInput(BaseModel):
-    plan: str = Field(description="The updated step-by-step plan for the current task.")
-
-class SetStatusInput(BaseModel):
-    status: str = Field(description="Brief status message for the UI (e.g. 'Analyzing index...').")
-
-class UndoInput(BaseModel):
-    message_id: str = Field(description="The ID of the turn/message to revert. Use the tool_use ID from the turn you want to undo.")
-
-class NotebookEditInput(BaseModel):
-    file_path: str = Field(description="Path to the .ipynb file.")
-    cell_id: str = Field(description="UUID or virtual ID (cell-0, cell-1) of the cell.")
-    new_source: str = Field(description="New content for the cell.")
-    edit_mode: str = Field(default="replace", description="replace, insert, or delete.")
-    cell_type: str = Field(default="code", description="code or markdown.")
+# -----------------------------------------------------------------------------
+# TOOL REGISTRY (Extended)
+# -----------------------------------------------------------------------------
 
 class DoctorInput(BaseModel):
     pass
@@ -485,21 +485,9 @@ def undo_last_edit(message_id: str) -> str:
     except Exception as e:
         return f"Error performing undo: {str(e)}"
 
-class UpdatePlanInput(BaseModel):
-    plan: str = Field(description="The updated step-by-step plan for the current task.")
-
-class SetStatusInput(BaseModel):
-    status: str = Field(description="Brief status message for the UI (e.g. 'Analyzing index...').")
-
-class UndoInput(BaseModel):
-    message_id: str = Field(description="The ID of the turn/message to revert. Use the tool_use ID from the turn you want to undo.")
-
-class NotebookEditInput(BaseModel):
-    file_path: str = Field(description="Path to the .ipynb file.")
-    cell_id: str = Field(description="UUID or virtual ID (cell-0, cell-1) of the cell.")
-    new_source: str = Field(description="New content for the cell.")
-    edit_mode: str = Field(default="replace", description="replace, insert, or delete.")
-    cell_type: str = Field(default="code", description="code or markdown.")
+# -----------------------------------------------------------------------------
+# TOOL REGISTRY (Extended)
+# -----------------------------------------------------------------------------
 
 class DoctorInput(BaseModel):
     pass
@@ -521,21 +509,9 @@ class GitLogInput(BaseModel):
 
 # -----------------------------------------------------------------------------
 # TOOL REGISTRY (Extended)
-class UpdatePlanInput(BaseModel):
-    plan: str = Field(description="The updated step-by-step plan for the current task.")
-
-class SetStatusInput(BaseModel):
-    status: str = Field(description="Brief status message for the UI (e.g. 'Analyzing index...').")
-
-class UndoInput(BaseModel):
-    message_id: str = Field(description="The ID of the turn/message to revert. Use the tool_use ID from the turn you want to undo.")
-
-class NotebookEditInput(BaseModel):
-    file_path: str = Field(description="Path to the .ipynb file.")
-    cell_id: str = Field(description="UUID or virtual ID (cell-0, cell-1) of the cell.")
-    new_source: str = Field(description="New content for the cell.")
-    edit_mode: str = Field(default="replace", description="replace, insert, or delete.")
-    cell_type: str = Field(default="code", description="code or markdown.")
+# -----------------------------------------------------------------------------
+# TOOL REGISTRY (Extended)
+# -----------------------------------------------------------------------------
 
 class DoctorInput(BaseModel):
     pass

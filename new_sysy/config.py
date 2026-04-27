@@ -140,12 +140,12 @@ RERANK_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 RERANK_TOP_K = 8
 RERANK_CANDIDATES = 30
 
-ENABLE_AUTO_SPECIALIST = True
+ENABLE_AUTO_SPECIALIST = False
 SPECIALIST_MAPPING = {
-    "CODE": "ollama-cloud:qwen3.6-coder:32b-cloud",
+    "CODE": "ollama-cloud:gpt-oss:120b-cloud",
     "REASONING": "ollama-cloud:gpt-oss:120b-cloud",
-    "VISION": "google/gemma-4-31b-it:free",
-    "GENERAL": "ollama-cloud:gemma4:31b-cloud"
+    "VISION": "google/gemini-2.0-flash-001",
+    "GENERAL": "ollama-cloud:gpt-oss:120b-cloud"
 }
 
 ENABLE_HYBRID_SEARCH = True

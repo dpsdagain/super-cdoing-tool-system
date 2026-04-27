@@ -41,14 +41,13 @@ PLANNER_PROMPT = """You are a strategic orchestrator for an AI agent.
 Based on the conversation history, decide the next logical step.
 
 ACTIONS:
-1. "rag": Use if you need to search codebase context, find documentation, or understand high-level architecture.
-2. "tool": Use if you need to perform a specific action (read/write/edit files, run commands) or if you already know exactly which file to look at.
-3. "final": Use ONLY if you have completed the user's request or have a definitive answer.
+1. "tool": Use to perform a specific action (read/write/edit files, run commands, grep search). This is your primary way of interacting with the codebase.
+2. "final": Use ONLY if you have completed the user's request or have a definitive answer.
 
 Respond ONLY with JSON:
 {
-    "action": "rag" | "tool" | "final",
-    "input": "Search query for RAG, or instruction for tool use, or final response",
+    "action": "tool" | "final",
+    "input": "Instruction for tool use, or final response",
     "reason": "Brief justification"
 }"""
 
@@ -168,19 +167,25 @@ class QueryEngine:
         self.llm = ModelFactory.create_model(self.model_id, temperature=self.temperature)
         
         # 🚀 Anthropic-Grade Plan/Act Separation
-        self.planner_llm = ModelFactory.create_model("fast", temperature=0.0)
+        # Use main model for planning if "fast" is failing or user prefers consistency
+        self.planner_llm = ModelFactory.create_model(self.model_id, temperature=0.0)
         
         self.permission_manager = PermissionManager(mode=permission_mode)
         self.context_manager = ContextManager()
         self.context_rules = ContextRules(self.root_dir)
-        self.history_manager = HistoryManager(self.session_dir)
-        self.usage_tracker = UsageTracker()
-        self.permission_callback = None # Set by CLI/API
         self.session_dir = SESSION_DIR
         os.makedirs(self.session_dir, exist_ok=True)
+        self.history_manager = HistoryManager(self.session_dir)
+        self.usage_tracker = UsageTracker()
+        self.dream_engine = DreamEngine(self.root_dir)
+        self.permission_callback = None # Set by CLI/API
         self.hooks: List[Any] = [] # List[AgentHook]
         self.current_plan: str = "No plan defined yet."
         self.current_status: str = "Initializing..."
+
+        # 🚀 Initialize RAG Chain
+        from rag_chain import build_rag_chain
+        self.rag_chain = build_rag_chain(None, model=self.model_id)
 
         # Convert AVAILABLE_TOOLS to LangChain tool format
         self.tools_metadata = [
@@ -438,9 +443,9 @@ Based on this status, determine the next action."""
             yield {"type": "status", "content": f"Warning: Context is {safety['usage_pct']}% full."}
 
         # 1. Decision Layer (Planner)
-        decision = self._call_planner(messages, state.turn_count, state.executed_actions)
-        action = decision.get("action", "tool")
-        action_input = decision.get("input", "")
+        planner_decision = self._call_planner(messages, state.turn_count, state.executed_actions)
+        action = planner_decision.get("action", "tool")
+        action_input = planner_decision.get("input", "")
         
         # Stall Check & Prevention
         action_sig = f"action:{action} input:{action_input[:40]}"
@@ -453,8 +458,8 @@ Based on this status, determine the next action."""
             yield {"type": "status", "content": f"RAG: Exploring knowledge for '{action_input}'..."}
             try:
                 rag_result = ""
-                # Use the RAG chain directly
-                for event in _full_context_cache_chain().stream({"question": action_input, "chat_history": messages}):
+                # Use the RAG chain directly. Correct keys: 'input' and 'chat_history'
+                for event in self.rag_chain.stream({"input": action_input, "chat_history": messages}):
                     if isinstance(event, dict) and "answer" in event:
                         rag_result += event["answer"]
                 
@@ -468,7 +473,7 @@ Based on this status, determine the next action."""
                 logger.error(f"RAG failed: {e}")
                 
         elif action == "tool":
-            yield {"type": "status", "content": f"Thinking: {decision.get('reason', 'Processing...')}"}
+            yield {"type": "status", "content": f"Thinking: {planner_decision.get('reason', 'Processing...')}"}
             try:
                 response = self.llm_with_tools.invoke(messages)
                 state.messages.append(response)
@@ -476,27 +481,32 @@ Based on this status, determine the next action."""
                 
                 if not response.tool_calls:
                     state.is_terminal = True
+                    action = "final"
                 else:
                     for tc in response.tool_calls:
                         # 🛡️ F-14: Permission Guardian Gate
                         tool_name = tc['name']
-                        args = tc['args']
-                        decision = self.permission_manager.check_permission(tool_name, args)
+                        tool_args = tc['args']
+                        perm_decision = self.permission_manager.check_permission(tool_name, tool_args)
                         
-                        if decision.behavior == "deny":
-                            yield {"type": "status", "content": f"Blocked: {decision.reason}"}
-                            result = f"Error: Permission denied. {decision.reason}"
-                        elif decision.behavior == "ask":
-                            # Interrupt and wait for user. Ported from interactiveHandler.ts
-                            yield {"type": "permission_request", "tool": tool_name, "args": args}
-                            return # Exit tick to wait for input
+                        if perm_decision.behavior == "deny":
+                            yield {"type": "status", "content": f"Blocked: {perm_decision.reason}"}
+                            result = f"Error: Permission denied. {perm_decision.reason}"
+                        elif perm_decision.behavior == "ask":
+                            # Interrupt and wait for user. 
+                            yield {"type": "permission_request", "tool": tool_name, "args": tool_args}
+                            # The CLI will continue if approved. In the engine, we assume the next tick 
+                            # will only happen if approved or we handle it via a callback.
+                            # For simplicity in this architecture, we execute if we didn't return.
+                            yield {"type": "status", "content": f"Action: Running {tool_name}..."}
+                            result = self.execute_tool(tool_name, tool_args, tc.get("id", "unknown"))
                         else:
                             # ⏪ F-28: Automatic Pre-Edit Checkpointing
                             if tool_name in ["file_write", "file_edit", "multi_file_edit"]:
-                                self.history_manager.track_edit(args.get("file_path", ""), tc.get("id", "unknown"))
+                                self.history_manager.track_edit(tool_args.get("file_path", ""), tc.get("id", "unknown"))
                             
                             yield {"type": "status", "content": f"Action: Running {tool_name}..."}
-                            result = self.execute_tool(tool_name, args, tc.get("id", "unknown"))
+                            result = self.execute_tool(tool_name, tool_args, tc.get("id", "unknown"))
                         
                         tool_msg = ToolMessage(content=str(result), tool_call_id=tc.get("id", "unknown"))
                         state.messages.append(tool_msg)
@@ -508,19 +518,22 @@ Based on this status, determine the next action."""
                     state.messages = self.context_manager.compact(state.messages, plan=self.current_plan)
                     state.has_attempted_reactive_compact = True
                     state.turn_count -= 1 # Repeat this turn
+                    return
                 else:
                     logger.error(f"Execution failed: {e}")
-                    state.is_terminal = True
+                    raise e # Re-raise for tombstone handler
 
             # 🚀 ENFORCED TOOL ACTION (ACTIVE NUDGE)
-            if action == "tool":
-                yield {"type": "status", "content": f"Action: {decision.get('reason', 'Executing Tool...')}"}
+            # If the planner decided tool, but no tools were called, or we want to push for a nudge
+            if action == "tool" and not state.is_terminal:
+                yield {"type": "status", "content": f"Action: {planner_decision.get('reason', 'Executing Tool...')}"}
                 
                 # Active nudge to prevent model passivity (The "Lazy LLM" fix)
                 nudge = SystemMessage(content="If external action is required (file read/write, bash), you MUST call a tool now. Do not provide a text-only response unless you are giving a final answer.")
                 
                 full_response = None
-                for chunk in self.llm_with_tools.stream(messages + [nudge]):
+                # We use state.messages to ensure full context
+                for chunk in self.llm_with_tools.stream(state.messages + [nudge]):
                     if full_response is None:
                         full_response = chunk
                     else:
@@ -529,7 +542,7 @@ Based on this status, determine the next action."""
                     if chunk.content:
                         yield {"type": "chunk", "content": chunk.content}
                 
-                messages.append(full_response)
+                state.messages.append(full_response)
                 self.save_session(session_id, [full_response], append_only=True)
                 
                 # 💰 F-18: Capture and Audit Usage (Anthropic-Parity)
@@ -543,7 +556,7 @@ Based on this status, determine the next action."""
                     })
                 
                 if not full_response.tool_calls:
-                    if turn > 1:
+                    if state.turn_count > 1:
                         action = "final"
                     else:
                         return 
@@ -551,14 +564,22 @@ Based on this status, determine the next action."""
                 for tool_call in full_response.tool_calls:
                     tool_name, tool_args, tool_id = tool_call["name"], tool_call["args"], tool_call["id"]
                     
-                    # 🚀 HOOK: Pre-Tool Execution
-                    for hook in self.hooks:
-                        modified_args = hook.on_tool_call(tool_name, tool_args)
-                        if modified_args is not None:
-                            tool_args = modified_args
+                    # 🛡️ F-14: Permission Guardian Gate
+                    perm_decision = self.permission_manager.check_permission(tool_name, tool_args)
+                    if perm_decision.behavior == "deny":
+                        result = f"Error: Permission denied. {perm_decision.reason}"
+                    elif perm_decision.behavior == "ask":
+                        yield {"type": "permission_request", "tool": tool_name, "args": tool_args}
+                        return
+                    else:
+                        # 🚀 HOOK: Pre-Tool Execution
+                        for hook in self.hooks:
+                            modified_args = hook.on_tool_call(tool_name, tool_args)
+                            if modified_args is not None:
+                                tool_args = modified_args
 
-                    yield {"type": "status", "content": f"Executing {tool_name}..."}
-                    result = self.execute_tool(tool_name, tool_args, tool_id=tool_id)
+                        yield {"type": "status", "content": f"Executing {tool_name}..."}
+                        result = self.execute_tool(tool_name, tool_args, tool_id=tool_id)
                     
                     # 🚀 HOOK: Post-Tool Result
                     for hook in self.hooks:
@@ -572,36 +593,37 @@ Based on this status, determine the next action."""
                             "content": result, 
                             "tool_name": tool_name, 
                             "tool_id": tool_id,
-                            "messages": messages
+                            "messages": state.messages
                         }
                         return
                     
-                    tool_msg = ToolMessage(content=result, tool_call_id=tool_id)
-                    messages.append(tool_msg)
+                    tool_msg = ToolMessage(content=str(result), tool_call_id=tool_id)
+                    state.messages.append(tool_msg)
                     self.save_session(session_id, [tool_msg], append_only=True)
                     yield {"type": "tool_result", "tool": tool_name, "result": result}
                 
                 pass # Logic continues naturally
 
-            # 🚀 HIGH-FIDELITY FINAL ACTION
-            if action == "final":
-                final_prompt = """You are finishing the task. Based on all previous reasoning, tool results, and context:
+        # 🚀 HIGH-FIDELITY FINAL ACTION
+        if action == "final":
+            final_prompt = """You are finishing the task. Based on all previous reasoning, tool results, and context:
 1. Provide a clear and definitive final answer.
 2. Be concise and professional.
 3. Do not repeat unnecessary steps.
 4. If code was changed, summarize the modifications."""
-                
-                response = self.llm.invoke(messages + [SystemMessage(content=final_prompt)])
-                
-                # 🚀 HOOK: Turn End
-                for hook in self.hooks:
-                    hook.on_turn_end(response.content)
+            
+            response = self.llm.invoke(messages + [SystemMessage(content=final_prompt)])
+            
+            # 🚀 HOOK: Turn End
+            for hook in self.hooks:
+                hook.on_turn_end(response.content)
 
-                yield {"type": "chunk", "content": response.content}
-                yield {"type": "done", "messages": messages}
-                return
+            state.is_terminal = True
+            yield {"type": "chunk", "content": response.content}
+            yield {"type": "done", "messages": messages}
+            return
 
-        yield {"type": "error", "content": f"Safety limit: Maximum turns ({max_turns}) reached."}
+        yield {"type": "error", "content": f"Safety limit: Maximum turns ({state.max_turns}) reached."}
 
 
     def process_query(self, query: str, messages: Optional[List[Any]] = None, max_turns: int = 15):
@@ -619,8 +641,6 @@ Based on this status, determine the next action."""
             else:
                 messages = [SystemMessage(content=sys_content)]
         
-        from rag_chain import _full_context_cache_chain
-        
         messages = self.context_manager.compact(messages)
         
         if query:
@@ -633,7 +653,7 @@ Based on this status, determine the next action."""
             turn += 1
             logger.info(f"--- Strategic Planning (Turn {turn}) ---")
             
-            decision = self._call_planner(messages, turn)
+            decision = self._call_planner(messages, turn, executed_actions)
             action = decision.get("action", "tool")
             action_input = decision.get("input", "")
 
@@ -648,7 +668,7 @@ Based on this status, determine the next action."""
                 logger.info(f"RAG Retrieval: {action_input}")
                 rag_result = ""
                 # For sync, we collect the stream
-                for event in _full_context_cache_chain().stream({"question": action_input, "chat_history": messages}):
+                for event in self.rag_chain.stream({"input": action_input, "chat_history": messages}):
                     if isinstance(event, dict) and "answer" in event:
                         rag_result += event["answer"]
                 

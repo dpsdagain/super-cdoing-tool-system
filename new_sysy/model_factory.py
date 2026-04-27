@@ -57,10 +57,12 @@ class ModelFactory:
         try:
             # 3. Provider Instantiation
             if target_id.startswith(OLLAMA_CLOUD_PREFIX):
+                clean_name = target_id.replace(OLLAMA_CLOUD_PREFIX, "")
+                logger.info(f"ModelFactory: Routing to Ollama Cloud -> {clean_name}")
                 return ChatOpenAI(
                     base_url=OLLAMA_CLOUD_BASE_URL,
                     api_key=OLLAMA_CLOUD_API_KEY or "not-needed",
-                    model=target_id,
+                    model=clean_name,
                     temperature=temperature,
                     max_tokens=max_tokens,
                     streaming=True
@@ -68,6 +70,7 @@ class ModelFactory:
 
             if target_id.startswith(OLLAMA_PREFIX):
                 clean_name = target_id.replace(OLLAMA_PREFIX, "")
+                logger.info(f"ModelFactory: Routing to Local Ollama -> {clean_name}")
                 return ChatOllama(
                     base_url=OLLAMA_BASE_URL,
                     model=clean_name,
@@ -76,6 +79,8 @@ class ModelFactory:
                     streaming=True
                 )
 
+            # Default: OpenRouter
+            logger.info(f"ModelFactory: Routing to OpenRouter -> {target_id}")
             return ChatOpenAI(
                 base_url=OPENROUTER_BASE_URL,
                 api_key=OPENROUTER_API_KEY,
@@ -91,7 +96,7 @@ class ModelFactory:
             return ChatOpenAI(
                 base_url=OPENROUTER_BASE_URL,
                 api_key=OPENROUTER_API_KEY,
-                model="google/gemini-2.0-flash-001",
+                model="anthropic/claude-3-haiku", # More reliable fallback
                 temperature=0.0
             )
 
