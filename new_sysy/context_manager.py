@@ -4,6 +4,7 @@ from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AI
 from langchain_openai import ChatOpenAI
 from result_archive import ResultArchive
 from config import OLLAMA_CLOUD_BASE_URL, OLLAMA_CLOUD_API_KEY as API_KEY
+from estimator import ContextEstimator
 import subprocess
 
 logger = logging.getLogger(__name__)
@@ -13,17 +14,18 @@ class ContextManager:
     Anthropic-Grade 5-Layer Context Fortress (F-23).
     Tiered reduction preserves technical precision while bounding token cost.
     """
-    def __init__(self, max_context_tokens: int = 128000, compression_threshold: float = 0.9):
+    def __init__(self, max_context_tokens: int = 128000, compression_threshold: float = 0.9, summarizer_llm: Optional[Any] = None):
         self.max_context_tokens = max_context_tokens
         self.compression_threshold = compression_threshold
         self.result_archive = ResultArchive() # Layer 1 Instance
         
-        # Layer 5: Emergency Summarizer
-        self.summarizer_llm = ChatOpenAI(
-            base_url=OLLAMA_CLOUD_BASE_URL,
-            api_key=API_KEY,
-            model="ollama-cloud:gemma2:9b-cloud"
-        )
+        # Layer 5: Emergency Summarizer (Dependency Injected)
+        if summarizer_llm is None:
+            # Fallback for backward compatibility
+            from model_factory import ModelFactory
+            self.summarizer_llm = ModelFactory.create_model("ollama-cloud:gemma2:9b-cloud", temperature=0.0)
+        else:
+            self.summarizer_llm = summarizer_llm
 
     def compact(self, messages: List[BaseMessage], plan: str = "") -> List[BaseMessage]:
         """
@@ -148,11 +150,8 @@ class ContextManager:
         return final
 
     def estimate_tokens(self, messages: List[BaseMessage]) -> int:
-        """Rough-cut character-based estimation."""
-        total_chars = 0
-        for msg in messages:
-            total_chars += len(str(msg.content))
-        return total_chars // 4
+        """Rough-cut estimation using the centralized ContextEstimator."""
+        return ContextEstimator.estimate_tokens(messages)
 
     def _generate_summary(self, messages: List[BaseMessage]) -> str:
         """Technical distillation."""

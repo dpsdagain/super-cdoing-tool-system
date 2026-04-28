@@ -1,14 +1,8 @@
 import os
 import logging
 from typing import Any
-from langchain_openai import ChatOpenAI
-from langchain_community.chat_models import ChatOllama
-from config import (
-    OPENROUTER_BASE_URL, OPENROUTER_API_KEY,
-    OLLAMA_CLOUD_BASE_URL, OLLAMA_CLOUD_API_KEY,
-    OLLAMA_BASE_URL, OLLAMA_PREFIX, OLLAMA_CLOUD_PREFIX,
-    DEFAULT_MODEL
-)
+from llm_factory import get_llm
+from config import DEFAULT_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -52,53 +46,19 @@ class ModelFactory:
             max_tokens = 16384 # Scaled for RAG performance
             target_id = target_id.replace("[1m]", "")
 
-        logger.info(f"ModelFactory: Instantiating {target_id}")
-
+        logger.info(f"ModelFactory: Sourcing {target_id} via llm_factory")
+        
         try:
-            # 3. Provider Instantiation
-            if target_id.startswith(OLLAMA_CLOUD_PREFIX):
-                clean_name = target_id.replace(OLLAMA_CLOUD_PREFIX, "")
-                logger.info(f"ModelFactory: Routing to Ollama Cloud -> {clean_name}")
-                return ChatOpenAI(
-                    base_url=OLLAMA_CLOUD_BASE_URL,
-                    api_key=OLLAMA_CLOUD_API_KEY or "not-needed",
-                    model=clean_name,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    streaming=True
-                )
-
-            if target_id.startswith(OLLAMA_PREFIX):
-                clean_name = target_id.replace(OLLAMA_PREFIX, "")
-                logger.info(f"ModelFactory: Routing to Local Ollama -> {clean_name}")
-                return ChatOllama(
-                    base_url=OLLAMA_BASE_URL,
-                    model=clean_name,
-                    temperature=temperature,
-                    num_predict=max_tokens,
-                    streaming=True
-                )
-
-            # Default: OpenRouter
-            logger.info(f"ModelFactory: Routing to OpenRouter -> {target_id}")
-            return ChatOpenAI(
-                base_url=OPENROUTER_BASE_URL,
-                api_key=OPENROUTER_API_KEY,
-                model=target_id,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                streaming=True
-            )
+            # 🚀 3. Centralized Instantiation (Delegates to get_llm)
+            # We override max_tokens in the kwargs if the underlying function allows,
+            # or we just let get_llm use its global config for max_tokens.
+            # get_llm natively handles Anthropic caching headers and provider routing.
+            return get_llm(model=target_id, temperature=temperature, streaming=True)
             
         except Exception as e:
             logger.error(f"ModelFactory failover engaging: {e}")
             # Anthropic Pattern: Silent Peer Failover
-            return ChatOpenAI(
-                base_url=OPENROUTER_BASE_URL,
-                api_key=OPENROUTER_API_KEY,
-                model="anthropic/claude-3-haiku", # More reliable fallback
-                temperature=0.0
-            )
+            return get_llm(model="anthropic/claude-3-haiku", temperature=0.0, streaming=True)
 
     @staticmethod
     def list_available_categories():

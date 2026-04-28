@@ -91,15 +91,6 @@ os.makedirs(SESSION_DIR, exist_ok=True)
 os.makedirs(TEMP_OUTPUT_DIR, exist_ok=True)
 
 EMBEDDING_MODEL_NAME = "BAAI/bge-small-en-v1.5"
-
-CHUNK_SIZE = 1500
-CHUNK_OVERLAP = 200
-CODE_CHUNK_SIZE = 1000
-PDF_CHUNK_SIZE = 1500
-ZERO_CHUNK_THRESHOLD = 10000
-MAX_ZERO_CHUNK_CHARS = 12000   # ~3000 tokens — cap for zero-chunks surfaced via retrieval
-
-CHROMA_DB_DIR = os.path.join(os.path.dirname(__file__), "chroma_db")
 RETRIEVER_K = 12
 RETRIEVER_FETCH_K = 30
 

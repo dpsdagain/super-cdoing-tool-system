@@ -18,23 +18,30 @@ class ContextEstimator:
     """
     
     @staticmethod
-    def estimate_tokens(messages: List[Any]) -> int:
+    def estimate_content_tokens(content: Any) -> int:
         """
-        Performs a 'Rough-Cut' token estimation (chars / 3.8).
-        Anthropic uses a similar local heuristic for fast decisions.
+        Estimates the number of tokens in a piece of content (string or list).
+        Heuristic: 1 token approx 3.8 characters (Anthropic-Grade).
         """
-        total_chars = 0
+        if not content:
+            return 0
+        if isinstance(content, str):
+            return int(len(content) / 3.8)
+        elif isinstance(content, list):
+            # Handles multi-modal/tool blocks by converting to string representation
+            return int(len(str(content)) / 3.8)
+        return int(len(str(content)) / 3.8)
+
+    @classmethod
+    def estimate_tokens(cls, messages: List[Any]) -> int:
+        """
+        Performs a 'Rough-Cut' token estimation for a list of messages.
+        """
+        total_tokens = 0
         for msg in messages:
             content = getattr(msg, "content", "")
-            if isinstance(content, str):
-                total_chars += len(content)
-            elif isinstance(content, list):
-                # Handles multi-modal/tool blocks
-                for block in content:
-                    total_chars += len(str(block))
-        
-        # Heuristic: 1 token approx 4 chars in English
-        return int(total_chars / 3.8)
+            total_tokens += cls.estimate_content_tokens(content)
+        return total_tokens
 
     @staticmethod
     def check_flight_safety(model: str, messages: List[Any]) -> Dict[str, Any]:
