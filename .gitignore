@@ -37,3 +37,4 @@ anthropic-leaked-source-code-main/
 # OS
 .DS_Store
 Thumbs.db
+*:Zone.Identifier
