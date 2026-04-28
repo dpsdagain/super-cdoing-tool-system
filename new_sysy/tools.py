@@ -243,7 +243,12 @@ def build_tool(
     }
 
 # 🌐 Global Engine Context for Tool-to-Coordinator Routing
-current_engine = None
+# Refactored to thread-local to support multi-session scaling.
+class EngineContext(threading.local):
+    def __init__(self):
+        self.instance = None
+
+current_engine = EngineContext()
 
 logger = logging.getLogger(__name__)
 
@@ -429,11 +434,10 @@ def git_log(limit: int = 5) -> str:
 def cost_report() -> str:
     """Generate a high-precision session cost report (F-18 Parity). Shows token usage and USD cost."""
     try:
-        from query_engine import current_engine
-        if not current_engine or not current_engine.usage_tracker:
+        if not current_engine.instance or not current_engine.instance.usage_tracker:
             return "Error: Usage Tracker not initialized."
         
-        return current_engine.usage_tracker.get_report()
+        return current_engine.instance.usage_tracker.get_report()
     except Exception as e:
         return f"Error generating cost report: {str(e)}"
 
@@ -473,11 +477,10 @@ def notebook_edit(file_path: str, cell_id: str, new_source: str, edit_mode: str 
 def undo_last_edit(message_id: str) -> str:
     """Roll back file changes made in a specific turn (F-28 Parity)."""
     try:
-        from query_engine import current_engine
-        if not current_engine or not current_engine.history_manager:
+        if not current_engine.instance or not current_engine.instance.history_manager:
             return "Error: History Manager not initialized."
         
-        reverted = current_engine.history_manager.rollback(message_id)
+        reverted = current_engine.instance.history_manager.rollback(message_id)
         if not reverted:
             return f"No changes found to undo for turn ID: {message_id}"
             
@@ -601,14 +604,11 @@ def bash_tool(command: str) -> str:
     from queue import Queue, Empty
 
     try:
-        # Security check - Expanded Blacklist
-        dangerous = [
-            "rm -rf /", "mkfs", "dd if=", "format", "chown", "chmod", 
-            "> /etc/", "sudo", "su -", "userdel", "groupdel",
-            ":(){ :|:& };:", # Fork bomb
-        ]
-        if any(d in command for d in dangerous):
-            return "Error: Command rejected for security reasons (Dangerous pattern detected)."
+        # 🛡️ Advanced Security Fix: Claude Code grade semantic command validation
+        from bash_security import BashSecurityAnalyzer
+        security_result = BashSecurityAnalyzer.analyze(command)
+        if not security_result["allowed"]:
+            return f"Error: Command rejected for security reasons. {security_result['reason']}"
 
         # 🚀 Path Sentinel for BASH: Prevent commands from targeting paths outside the workspace
         # We look for path-like strings in the command and validate them
@@ -626,10 +626,18 @@ def bash_tool(command: str) -> str:
         if os.name == 'nt':
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
 
+        # 🛡️ Security Fix: Avoid shell=True to prevent shell injection.
+        # Note: This may break complex shell features like pipes (|) or redirects (>).
+        import shlex
+        try:
+            cmd_args = shlex.split(command)
+        except Exception as e:
+            return f"Error parsing command: {str(e)}"
+
         # Use Popen to allow real-time reading
         process = subprocess.Popen(
-            command,
-            shell=True,
+            cmd_args,
+            shell=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=1,
@@ -1019,14 +1027,14 @@ def agent_delegate(task: str, context_files: List[str] = []) -> str:
     Spawn a sub-agent to handle a specific delegated task.
     Orchestrated by the Multi-Agent Coordinator (Coordinator.ts).
     """
-    if current_engine is None:
+    if current_engine.instance is None:
         return "Error: Coordinator not initialized."
     
     context_summary = f"Focus files: {', '.join(context_files)}" if context_files else "General repository context."
     
     try:
         # 🐝 Route through the Coordinator for isolated Worker spawning
-        return current_engine.coordinator.delegate(task, context_summary)
+        return current_engine.instance.coordinator.delegate(task, context_summary)
     except Exception as e:
         return f"Error in agent delegation: {str(e)}"
 

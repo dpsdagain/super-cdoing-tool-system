@@ -31,6 +31,9 @@ budget_config.json
 # Environment variables
 .env
 
+# Anthropic Leaked Source (STRICTLY EXCLUDE)
+anthropic-leaked-source-code-main/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -1033,6 +1033,16 @@ def build_rag_chain(db: Chroma, model: str | None = None):
     # token threshold is crossed.  Stored as a mutable dict so the closure
     # can mutate it without a `nonlocal` declaration.
     _sentinel_cooldown: dict[str, int] = {"last_turn": 0}
+    _sentinel_failures: dict[str, int] = {"count": 0}
+    MAX_SENTINEL_FAILURES = 3
+
+    def _on_sentinel_done(future):
+        try:
+            future.result()
+            _sentinel_failures["count"] = 0 # Reset on success
+        except Exception as e:
+            _sentinel_failures["count"] += 1
+            logger.error(f"Sentinel failure ({_sentinel_failures['count']}/{MAX_SENTINEL_FAILURES}): {e}")
 
     def _full_context_cache_chain(inputs: dict):
         """
@@ -1087,8 +1097,10 @@ def build_rag_chain(db: Chroma, model: str | None = None):
         # Fire when history exceeds the token budget AND at least SENTINEL_INTERVAL
         # turns have passed since the last sentinel run.  Without the cooldown,
         # once the threshold is crossed it fires every single turn.
+        # 🛡️ Circuit Breaker: Stop retrying if sentinel is failing consistently.
         should_summarize = (
             turn_count > 0
+            and _sentinel_failures["count"] < MAX_SENTINEL_FAILURES
             and estimated_history_tokens >= SENTINEL_TOKEN_THRESHOLD
             and (turn_count - _sentinel_cooldown["last_turn"]) >= SENTINEL_INTERVAL
         )
@@ -1583,6 +1595,7 @@ def build_rag_chain(db: Chroma, model: str | None = None):
             _sentinel_cooldown["last_turn"] = turn_count
             # CRITICAL FIX: Pass a snapshot (shallow copy) to prevent thread race condition
             background_future = _background_executor.submit(_background_summarize, list(full_history))
+            background_future.add_done_callback(_on_sentinel_done)
 
         yield {
             "context": inputs["context"], 

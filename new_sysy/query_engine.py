@@ -52,10 +52,13 @@ Respond ONLY with JSON:
 }"""
 
 
+import threading
+import tools
+
 logger = logging.getLogger(__name__)
 
-# Global reference for tools that need engine context (like undo)
-current_engine = None
+# Use the thread-local engine context defined in tools.py
+current_engine = tools.current_engine
 
 SYSTEM_PROMPT = """You are an autonomous AI software engineer operating on a Windows (win32) system. You have access to a set of tools to research, read, and edit code, as well as execute shell commands.
 
@@ -94,14 +97,14 @@ class WorkerAgent:
     Isolated Sub-Agent (Worker) with its own context window.
     Designed for surgical sub-tasks (Research, Testing, Linter fixes).
     """
-    def __init__(self, delegation_depth: int, main_model: str):
+    def __init__(self, delegation_depth: int, main_model: str, permission_mode: str = "ASK"):
         self.depth = delegation_depth
         self.model = main_model
-        # Workers are always 'AUTO' permitted to prevent UI deadlocks during delegation
+        # Workers inherit the permission mode from their coordinator
         self.engine = QueryEngine(
             session_id=f"worker_{os.getpid()}_{self.depth}",
             model_id=self.model,
-            permission_mode="AUTO",
+            permission_mode=permission_mode,
             delegation_depth=self.depth
         )
 
@@ -131,7 +134,8 @@ class Coordinator:
         
         worker = WorkerAgent(
             delegation_depth=self.manager_engine.delegation_depth + 1,
-            main_model=self.manager_engine.model_id
+            main_model=self.manager_engine.model_id,
+            permission_mode=self.manager_engine.permission_manager.mode
         )
         
         # Hydrate the worker with relevant context from the manager
@@ -152,12 +156,11 @@ class QueryEngine:
         
         # 🌐 Register engine globally for tool access (F-Coordinator)
         import tools
-        tools.current_engine = self
+        tools.current_engine.instance = self
         self.temperature = temperature
         self.root_dir = os.getcwd()
         
-        global current_engine
-        current_engine = self
+        current_engine.instance = self
         
         # Build extra headers for prompt caching if enabled
         self.extra_headers = {}
@@ -404,21 +407,21 @@ Based on this status, determine the next action."""
                     yield event
             except (Exception, KeyboardInterrupt) as e:
                 # 🕯️ The Tombstone Phase: Burn the orphaned trail
-                # 🛑 GHOST DISCARD: Force-terminate any active tool processes (bash, git, etc.) (Line 734)
+                # 🛑 GHOST DISCARD: Force-terminate any active tool processes (bash, git, etc.)
                 import tools
                 tools.cleanup_active_processes()
                 
                 orphans = state.messages[history_length_before_tick:]
                 if orphans:
                     logger.warning(f"Tombstone Action: Purging {len(orphans)} orphaned messages and terminating active tools.")
-                    state.messages = state.messages[:history_length_before_tick]
                     
-                    # Yield a tombstone event for the UI to clean up
-                    yield {
-                        "type": "tombstone", 
-                        "content": f"Streaming Error: {str(e)[:100]}... Discarding partial history to prevent strategic drift.",
-                        "purged_messages": len(orphans)
-                    }
+                    # Yield tombstones for orphaned messages so they're removed from UI and transcript.
+                    # These partial messages (especially thinking blocks) have invalid signatures
+                    # that would cause "thinking blocks cannot be modified" API errors.
+                    for msg in orphans:
+                        yield { "type": "tombstone", "content": f"Discarding orphaned message: {type(msg).__name__}" }
+                    
+                    state.messages = state.messages[:history_length_before_tick]
                 
                 if isinstance(e, KeyboardInterrupt):
                     raise e
