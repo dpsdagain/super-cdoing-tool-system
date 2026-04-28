@@ -9,6 +9,7 @@ from langchain_core.documents import Document
 from backend import load_existing_chroma, SQLiteFTS5BM25
 from rag_chain import hybrid_search, get_reranker
 from config import RETRIEVER_K, RERANK_TOP_K, USE_RERANKER, WORKSPACE_ROOT
+from permissions import PermissionManager
 
 def tool(func):
     """Dummy decorator to support @tool syntax without changing registration logic."""
@@ -34,23 +35,14 @@ def cleanup_active_processes():
                 pass
         _active_process_groups.clear()
 
+# 🛡️ Centralized Permission Sentinel
+_perm_manager = PermissionManager()
+
 def validate_path(path: str) -> str:
-    """Ensure the path is within the WORKSPACE_ROOT boundary using OS-level checks."""
-    from pathlib import Path
-    try:
-        # Resolve to absolute, real path (handles .. and symlinks)
-        target = Path(path).resolve()
-        root = Path(WORKSPACE_ROOT).resolve()
-        
-        # Check if target is inside root
-        if not target.is_relative_to(root):
-            raise PermissionError(f"Access Denied: Path '{target}' is outside the allowed workspace '{root}'.")
-            
-        return str(target)
-    except Exception as e:
-        if isinstance(e, PermissionError):
-            raise e
-        raise PermissionError(f"Access Denied: Could not validate path '{path}'.")
+    """Delegates path validation to the central PermissionManager."""
+    if not _perm_manager.validate_path(path):
+        raise PermissionError(f"Access Denied: Path '{path}' is outside the allowed workspace or targets forbidden patterns.")
+    return str(os.path.abspath(path))
 
 class CodeSearchInput(BaseModel):
     query: str = Field(description="The natural language query or keywords to search for in the codebase.")
@@ -320,10 +312,6 @@ class NotebookEditInput(BaseModel):
     edit_mode: str = Field(default="replace", description="replace, insert, or delete.")
     cell_type: str = Field(default="code", description="code or markdown.")
 
-# -----------------------------------------------------------------------------
-# TOOL REGISTRY (Extended)
-# -----------------------------------------------------------------------------
-
 class DoctorInput(BaseModel):
     pass
 
@@ -344,28 +332,6 @@ class GitLogInput(BaseModel):
 
 # -----------------------------------------------------------------------------
 # GIT INTEGRATION (F-34)
-# -----------------------------------------------------------------------------
-# TOOL REGISTRY (Extended)
-# -----------------------------------------------------------------------------
-
-class DoctorInput(BaseModel):
-    pass
-
-class CostInput(BaseModel):
-    pass
-
-class GitStatusInput(BaseModel):
-    pass
-
-class GitDiffInput(BaseModel):
-    file_path: Optional[str] = Field(None, description="Optional path to a specific file to diff.")
-
-class GitCommitInput(BaseModel):
-    message: str = Field(description="The commit message.")
-
-class GitLogInput(BaseModel):
-    limit: int = Field(default=5, description="Number of recent commits to show.")
-
 # -----------------------------------------------------------------------------
 
 @tool
@@ -487,54 +453,6 @@ def undo_last_edit(message_id: str) -> str:
         return f"Successfully reverted changes for {len(reverted)} files. Turn ID: {message_id}"
     except Exception as e:
         return f"Error performing undo: {str(e)}"
-
-# -----------------------------------------------------------------------------
-# TOOL REGISTRY (Extended)
-# -----------------------------------------------------------------------------
-
-class DoctorInput(BaseModel):
-    pass
-
-class CostInput(BaseModel):
-    pass
-
-class GitStatusInput(BaseModel):
-    pass
-
-class GitDiffInput(BaseModel):
-    file_path: Optional[str] = Field(None, description="Optional path to a specific file to diff.")
-
-class GitCommitInput(BaseModel):
-    message: str = Field(description="The commit message.")
-
-class GitLogInput(BaseModel):
-    limit: int = Field(default=5, description="Number of recent commits to show.")
-
-# -----------------------------------------------------------------------------
-# TOOL REGISTRY (Extended)
-# -----------------------------------------------------------------------------
-# TOOL REGISTRY (Extended)
-# -----------------------------------------------------------------------------
-
-class DoctorInput(BaseModel):
-    pass
-
-class CostInput(BaseModel):
-    pass
-
-class GitStatusInput(BaseModel):
-    pass
-
-class GitDiffInput(BaseModel):
-    file_path: Optional[str] = Field(None, description="Optional path to a specific file to diff.")
-
-class GitCommitInput(BaseModel):
-    message: str = Field(description="The commit message.")
-
-class GitLogInput(BaseModel):
-    limit: int = Field(default=5, description="Number of recent commits to show.")
-
-# -----------------------------------------------------------------------------
 
 def file_edit(file_path: str, old_string: str, new_string: str) -> str:
     """Surgically replace old_string with new_string in a file (F-05 Parity)."""

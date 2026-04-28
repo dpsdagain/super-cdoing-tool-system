@@ -29,7 +29,7 @@ from config import (
 from context_manager import ContextManager
 from context_rules import ContextRules
 from model_factory import ModelFactory
-from permission_manager import PermissionManager
+from permissions import PermissionManager
 from history_manager import HistoryManager
 from dream_engine import DreamEngine
 from estimator import ContextEstimator
