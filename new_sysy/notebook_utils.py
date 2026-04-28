@@ -32,7 +32,7 @@ class NotebookMutator:
             if target_idx == -1 and cell_id.startswith("cell-"):
                 try:
                     target_idx = int(cell_id.split("-")[1])
-                except:
+                except Exception:
                     pass
 
             if edit_mode != "insert" and (target_idx < 0 or target_idx >= len(cells)):

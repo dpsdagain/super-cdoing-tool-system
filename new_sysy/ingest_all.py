@@ -1,6 +1,6 @@
 import os
 import logging
-from backend import load_and_chunk_codebase, ingest_into_chroma
+from ingestion import load_and_chunk_codebase, ingest_into_chroma
 from config import WORKSPACE_ROOT, CHROMA_DB_DIR
 
 # Configure logging to see results in terminal

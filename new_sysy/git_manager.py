@@ -45,7 +45,7 @@ class GitManager:
                     # For worktrees, we follow the chain
                     # (Simplified for parity without complex worktree-count logic)
                     return git_root
-            except:
+            except Exception:
                 pass
         return git_root
 
@@ -101,5 +101,5 @@ class GitManager:
                 check=False
             )
             return res.stdout if res.returncode == 0 else None
-        except:
+        except Exception:
             return None

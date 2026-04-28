@@ -1,20 +1,20 @@
+"""
+file_tools.py — File I/O, Search, and Edit Tools.
+Provides code_search, file_read, file_edit, file_write, grep, glob, brief, and symbol_search.
+"""
 import os
-import threading
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 from pydantic import BaseModel, Field
-from tool_registry import tool, validate_path, current_engine
-from config import WORKSPACE_ROOT
+from tool_registry import validate_path
+from config import WORKSPACE_ROOT, RETRIEVER_K, RERANK_TOP_K, USE_RERANKER
+
 logger = logging.getLogger(__name__)
 
 
-
-from config import RETRIEVER_K, RERANK_TOP_K, USE_RERANKER
-from pydantic import BaseModel, Field
-from backend import load_existing_chroma, SQLiteFTS5BM25
-from rag_core import hybrid_search
-from search_engine import get_reranker
-
+# ═══════════════════════════════════════════════════════════════════════════
+#  Pydantic Input Schemas
+# ═══════════════════════════════════════════════════════════════════════════
 
 class CodeSearchInput(BaseModel):
     query: str = Field(description='The natural language query or keywords to search for in the codebase.')
@@ -31,6 +31,11 @@ class FileEditInput(BaseModel):
     old_string: str = Field(description='The exact literal text to replace.')
     new_string: str = Field(description='The text to replace old_string with.')
 
+class Replacement(BaseModel):
+    """A single find-and-replace pair for multi_file_edit."""
+    old_string: str = Field(description='The exact literal text to replace.')
+    new_string: str = Field(description='The text to replace old_string with.')
+
 class MultiFileEditInput(BaseModel):
     file_path: str = Field(description='The absolute path to the file to edit.')
     replacements: List[Replacement] = Field(description='A list of replacement pairs.')
@@ -39,8 +44,28 @@ class FileWriteInput(BaseModel):
     file_path: str = Field(description='The absolute path to the file to create or overwrite.')
     content: str = Field(description='The full content to write to the file.')
 
+class GrepInput(BaseModel):
+    pattern: str = Field(description='The regex pattern to search for.')
+    include_pattern: Optional[str] = Field(default=None, description='Only search files matching this glob (e.g. "*.py").')
+    exclude_pattern: Optional[str] = Field(default=None, description='Exclude files matching this glob.')
+    case_sensitive: bool = Field(default=False, description='Whether to match case-sensitively.')
+
+class GlobInput(BaseModel):
+    pattern: str = Field(description='The glob pattern to search for (e.g., "**/*.py").')
+
+class BriefInput(BaseModel):
+    file_path: str = Field(description='The path to the file to outline.')
+
 class SymbolSearchInput(BaseModel):
     symbol: str = Field(description='The name of the class, function, or variable to find the definition of.')
+
+class UndoInput(BaseModel):
+    message_id: str = Field(description='The turn/message ID whose file changes should be reverted.')
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Tool Functions (lazy imports to avoid circular deps at module load)
+# ═══════════════════════════════════════════════════════════════════════════
 
 def grep_tool(pattern: str, include_pattern: Optional[str]=None, exclude_pattern: Optional[str]=None, case_sensitive: bool=False) -> str:
     """Search for a pattern across the codebase using Python-native regex for platform consistency."""
@@ -85,7 +110,6 @@ def multi_file_edit(file_path: str, replacements: List[Replacement]) -> str:
     try:
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
-        original_content = content
         diffs = []
         for rep in replacements:
             old_str = rep.old_string
@@ -105,6 +129,8 @@ def multi_file_edit(file_path: str, replacements: List[Replacement]) -> str:
 
 def code_search(query: str, collection_name: str='default', k: int=RETRIEVER_K) -> str:
     """Search the codebase using hybrid search (Vector + BM25)."""
+    from backend import load_existing_chroma
+    from search_engine import hybrid_search, get_reranker
     db = load_existing_chroma(collection_name)
     if not db:
         return f"Error: Collection '{collection_name}' not found or is empty."

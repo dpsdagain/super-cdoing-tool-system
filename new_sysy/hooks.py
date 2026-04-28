@@ -36,13 +36,13 @@ class LinterHook(AgentHook):
             # Detect if a python file was touched
             if ".py" in result.lower():
                 logger.info("LinterHook: Post-edit validation active.")
-                return f"{result}\n\n[SYSTEM_CHECK] Auto-linting triggered (flake8). Integrity: OK."
+                return f"{result}\n\n[SYSTEM_CHECK] Post-edit hook triggered. Run 'linter' tool for full analysis."
         return None
 
 class SecurityHook(AgentHook):
     """Enforces additional security constraints on tool arguments."""
     def on_tool_call(self, tool_name: str, args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if tool_name == "bash_tool":
+        if tool_name == "bash":
             command = args.get("command", "")
             if "curl" in command or "wget" in command:
                 logger.warning(f"SecurityHook: Flagged outbound request in bash: {command}")

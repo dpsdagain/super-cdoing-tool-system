@@ -1,12 +1,14 @@
+"""
+git_tools.py — Git Integration Tools.
+git_status, git_diff, git_commit, git_root, git_log.
+"""
 import os
-import threading
+import subprocess
 import logging
-from typing import List, Optional, Dict, Any
+from typing import Optional
 from pydantic import BaseModel, Field
-from tool_registry import tool, validate_path, current_engine
-from config import WORKSPACE_ROOT
-logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
 
 
 class GitStatusInput(BaseModel):
@@ -21,18 +23,16 @@ class GitCommitInput(BaseModel):
 class GitLogInput(BaseModel):
     limit: int = Field(default=5, description='Number of recent commits to show.')
 
-@tool
+
 def git_status() -> str:
-    """Read the current git status of the project (F-34). Returns structured tracked/untracked files as JSON."""
+    """Read the current git status of the project. Returns structured tracked/untracked files as JSON."""
     from git_manager import GitManager
     import json
     manager = GitManager(os.getcwd())
     return json.dumps(manager.get_file_status(), indent=2)
 
-@tool
-def git_diff(file_path: Optional[str]=None) -> str:
-    """Show changes in the working directory (F-34). Automatically skips binary files."""
-    import subprocess
+def git_diff(file_path: Optional[str] = None) -> str:
+    """Show changes in the working directory. Automatically skips binary files."""
     from pathlib import Path
     if file_path:
         ext = Path(file_path).suffix.lower()
@@ -47,10 +47,8 @@ def git_diff(file_path: Optional[str]=None) -> str:
     except Exception as e:
         return f'Error running git diff: {str(e)}'
 
-@tool
 def git_commit(message: str) -> str:
     """Commit staged changes to the repository."""
-    import subprocess
     try:
         status = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True).stdout
         if not any((not line.startswith('??') for line in status.splitlines() if line.strip())):
@@ -60,7 +58,6 @@ def git_commit(message: str) -> str:
     except Exception as e:
         return f'Error running git commit: {str(e)}'
 
-@tool
 def git_root() -> str:
     """Find the canonical git root of the project, resolving through worktrees/submodules."""
     from git_manager import GitManager
@@ -68,12 +65,10 @@ def git_root() -> str:
     root = manager.resolve_canonical_root()
     return str(root) if root else 'Not a git repository.'
 
-@tool
-def git_log(limit: int=5) -> str:
+def git_log(limit: int = 5) -> str:
     """View recent project history (Commits)."""
-    import subprocess
     try:
         res = subprocess.run(['git', 'log', '--oneline', '-n', str(limit)], capture_output=True, text=True)
         return res.stdout if res.returncode == 0 else 'Error reading git log.'
-    except:
-        return 'Git not found.'
+    except Exception as e:
+        return f'Git not found: {str(e)}'

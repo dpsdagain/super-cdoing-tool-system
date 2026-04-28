@@ -91,6 +91,17 @@ os.makedirs(SESSION_DIR, exist_ok=True)
 os.makedirs(TEMP_OUTPUT_DIR, exist_ok=True)
 
 EMBEDDING_MODEL_NAME = "BAAI/bge-small-en-v1.5"
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  CHUNKING CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════
+CHUNK_SIZE = 1500
+CHUNK_OVERLAP = 200
+CODE_CHUNK_SIZE = 2000
+PDF_CHUNK_SIZE = 1000
+ZERO_CHUNK_THRESHOLD = 100_000       # Files smaller than this are kept as a single doc
+MAX_ZERO_CHUNK_CHARS = 30_000        # Max chars for zero-chunks in retrieval results
+
 RETRIEVER_K = 12
 RETRIEVER_FETCH_K = 30
 

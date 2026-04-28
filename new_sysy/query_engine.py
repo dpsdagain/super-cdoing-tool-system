@@ -28,7 +28,7 @@ from config import (
 )
 from context_manager import ContextManager
 from context_rules import ContextRules
-from model_factory import ModelFactory
+from llm_factory import ModelFactory
 from permissions import PermissionManager
 from history_manager import HistoryManager
 from dream_engine import DreamEngine
@@ -145,7 +145,7 @@ class Coordinator:
 
 class QueryEngine:
     """The High-Fidelity Agentic Engine Loop (F-01)."""
-    def __init__(self, session_id: str = "default", model_id: str = DEFAULT_MODEL, temperature: float = LLM_TEMPERATURE, permission_mode: str = "ASK", delegation_depth: int = 0):
+    def __init__(self, session_id: str = "default", model_id: str = DEFAULT_MODEL, temperature: float = LLM_TEMPERATURE, permission_mode: str = "ASK", delegation_depth: int = 0, context_manager=None, permission_manager=None, history_manager=None, dream_engine=None):
         self.session_id = session_id
         self.model_id = model_id
         self.permission_mode = permission_mode
@@ -159,9 +159,7 @@ class QueryEngine:
         tools.current_engine.instance = self
         self.temperature = temperature
         self.root_dir = os.getcwd()
-        
-        current_engine.instance = self
-        
+
         # Build extra headers for prompt caching if enabled
         self.extra_headers = {}
         if ENABLE_PROMPT_CACHING:
@@ -173,14 +171,14 @@ class QueryEngine:
         # Use main model for planning if "fast" is failing or user prefers consistency
         self.planner_llm = ModelFactory.create_model(self.model_id, temperature=0.0)
         
-        self.permission_manager = PermissionManager(mode=permission_mode)
-        self.context_manager = ContextManager()
+        self.permission_manager = permission_manager or PermissionManager(mode=permission_mode)
+        self.context_manager = context_manager or ContextManager()
         self.context_rules = ContextRules(self.root_dir)
         self.session_dir = SESSION_DIR
         os.makedirs(self.session_dir, exist_ok=True)
-        self.history_manager = HistoryManager(self.session_dir)
+        self.history_manager = history_manager or HistoryManager(self.session_dir)
         self.usage_tracker = UsageTracker()
-        self.dream_engine = DreamEngine(self.root_dir)
+        self.dream_engine = dream_engine or DreamEngine(self.root_dir)
         self.permission_callback = None # Set by CLI/API
         self.hooks: List[Any] = [] # List[AgentHook]
         self.current_plan: str = "No plan defined yet."
@@ -428,6 +426,56 @@ Based on this status, determine the next action."""
         # 🧠 F-50: Autonomous Post-Turn Reflection (AutoDream)
         self.dream_engine.reflect_and_learn(state.messages, self.model_id)
 
+
+    def _process_tool_calls(self, tool_calls, state, session_id):
+        for tc in tool_calls:
+            tool_name = tc.get("name")
+            tool_args = tc.get("args", {})
+            tool_id = tc.get("id", "unknown")
+            
+            # 🛡️ F-14: Permission Guardian Gate
+            perm_decision = self.permission_manager.check_permission(tool_name, tool_args)
+            if perm_decision.behavior == "deny":
+                yield {"type": "status", "content": f"Blocked: {perm_decision.reason}"}
+                result = f"Error: Permission denied. {perm_decision.reason}"
+            elif perm_decision.behavior == "ask":
+                yield {"type": "permission_request", "tool": tool_name, "args": tool_args}
+                return
+            else:
+                # ⏪ F-28: Automatic Pre-Edit Checkpointing
+                if tool_name in ["file_write", "file_edit", "multi_file_edit"]:
+                    self.history_manager.track_edit(tool_args.get("file_path", ""), tool_id)
+                
+                # 🚀 HOOK: Pre-Tool Execution
+                for hook in self.hooks:
+                    modified_args = hook.on_tool_call(tool_name, tool_args)
+                    if modified_args is not None:
+                        tool_args = modified_args
+
+                yield {"type": "status", "content": f"Action: Running {tool_name}..."}
+                result = self.execute_tool(tool_name, tool_args, tool_id=tool_id)
+            
+            # 🚀 HOOK: Post-Tool Result
+            for hook in self.hooks:
+                modified_result = hook.on_tool_result(tool_name, result)
+                if modified_result is not None:
+                    result = modified_result
+
+            if isinstance(result, str) and result.startswith("[INTERRUPT_REQUIRED]"):
+                yield {
+                    "type": "interrupt", 
+                    "content": result, 
+                    "tool_name": tool_name, 
+                    "tool_id": tool_id,
+                    "messages": state.messages
+                }
+                return
+            
+            tool_msg = ToolMessage(content=str(result), tool_call_id=tool_id)
+            state.messages.append(tool_msg)
+            self.save_session(session_id, [tool_msg], append_only=True)
+            yield {"type": "tool_result", "tool": tool_name, "result": result}
+
     def _execute_tick(self, state: QueryState, session_id: str):
         """One iteration of the agent's logic engine."""
         messages = normalize_messages(state.messages)
@@ -482,34 +530,7 @@ Based on this status, determine the next action."""
                     state.is_terminal = True
                     action = "final"
                 else:
-                    for tc in response.tool_calls:
-                        # 🛡️ F-14: Permission Guardian Gate
-                        tool_name = tc['name']
-                        tool_args = tc['args']
-                        perm_decision = self.permission_manager.check_permission(tool_name, tool_args)
-                        
-                        if perm_decision.behavior == "deny":
-                            yield {"type": "status", "content": f"Blocked: {perm_decision.reason}"}
-                            result = f"Error: Permission denied. {perm_decision.reason}"
-                        elif perm_decision.behavior == "ask":
-                            # Interrupt and wait for user. 
-                            yield {"type": "permission_request", "tool": tool_name, "args": tool_args}
-                            # The CLI will continue if approved. In the engine, we assume the next tick 
-                            # will only happen if approved or we handle it via a callback.
-                            # For simplicity in this architecture, we execute if we didn't return.
-                            yield {"type": "status", "content": f"Action: Running {tool_name}..."}
-                            result = self.execute_tool(tool_name, tool_args, tc.get("id", "unknown"))
-                        else:
-                            # ⏪ F-28: Automatic Pre-Edit Checkpointing
-                            if tool_name in ["file_write", "file_edit", "multi_file_edit"]:
-                                self.history_manager.track_edit(tool_args.get("file_path", ""), tc.get("id", "unknown"))
-                            
-                            yield {"type": "status", "content": f"Action: Running {tool_name}..."}
-                            result = self.execute_tool(tool_name, tool_args, tc.get("id", "unknown"))
-                        
-                        tool_msg = ToolMessage(content=str(result), tool_call_id=tc.get("id", "unknown"))
-                        state.messages.append(tool_msg)
-                        self.save_session(session_id, [tool_msg], append_only=True)
+                    yield from self._process_tool_calls(response.tool_calls, state, session_id)
             except Exception as e:
                 # Reactive Compact Recovery (F-40 / query.ts:168)
                 if "context_length_exceeded" in str(e).lower() and not state.has_attempted_reactive_compact:
@@ -560,46 +581,7 @@ Based on this status, determine the next action."""
                     else:
                         return 
 
-                for tool_call in full_response.tool_calls:
-                    tool_name, tool_args, tool_id = tool_call["name"], tool_call["args"], tool_call["id"]
-                    
-                    # 🛡️ F-14: Permission Guardian Gate
-                    perm_decision = self.permission_manager.check_permission(tool_name, tool_args)
-                    if perm_decision.behavior == "deny":
-                        result = f"Error: Permission denied. {perm_decision.reason}"
-                    elif perm_decision.behavior == "ask":
-                        yield {"type": "permission_request", "tool": tool_name, "args": tool_args}
-                        return
-                    else:
-                        # 🚀 HOOK: Pre-Tool Execution
-                        for hook in self.hooks:
-                            modified_args = hook.on_tool_call(tool_name, tool_args)
-                            if modified_args is not None:
-                                tool_args = modified_args
-
-                        yield {"type": "status", "content": f"Executing {tool_name}..."}
-                        result = self.execute_tool(tool_name, tool_args, tool_id=tool_id)
-                    
-                    # 🚀 HOOK: Post-Tool Result
-                    for hook in self.hooks:
-                        modified_result = hook.on_tool_result(tool_name, result)
-                        if modified_result is not None:
-                            result = modified_result
-
-                    if result.startswith("[INTERRUPT_REQUIRED]"):
-                        yield {
-                            "type": "interrupt", 
-                            "content": result, 
-                            "tool_name": tool_name, 
-                            "tool_id": tool_id,
-                            "messages": state.messages
-                        }
-                        return
-                    
-                    tool_msg = ToolMessage(content=str(result), tool_call_id=tool_id)
-                    state.messages.append(tool_msg)
-                    self.save_session(session_id, [tool_msg], append_only=True)
-                    yield {"type": "tool_result", "tool": tool_name, "result": result}
+                yield from self._process_tool_calls(full_response.tool_calls, state, session_id)
                 
                 pass # Logic continues naturally
 
@@ -623,88 +605,4 @@ Based on this status, determine the next action."""
             return
 
         yield {"type": "error", "content": f"Safety limit: Maximum turns ({state.max_turns}) reached."}
-
-
-    def process_query(self, query: str, messages: Optional[List[Any]] = None, max_turns: int = 15):
-        """Standard Agentic RAG Loop: Tick-based execution (sync version)."""
-        if messages is None or len(messages) == 0:
-            sys_content = SYSTEM_PROMPT
-            if ENABLE_PROMPT_CACHING:
-                messages = [SystemMessage(
-                    content=[{
-                        "type": "text", 
-                        "text": sys_content,
-                        "cache_control": {"type": "ephemeral"}
-                    }]
-                )]
-            else:
-                messages = [SystemMessage(content=sys_content)]
-        
-        messages = self.context_manager.compact(messages)
-        
-        if query:
-            messages.append(HumanMessage(content=query))
-        
-        turn = 0
-        executed_actions = []
-
-        while turn < max_turns:
-            turn += 1
-            logger.info(f"--- Strategic Planning (Turn {turn}) ---")
-            
-            decision = self._call_planner(messages, turn, executed_actions)
-            action = decision.get("action", "tool")
-            action_input = decision.get("input", "")
-
-            # Safety: Stall Detection
-            action_sig = f"{action}:{action_input[:50]}"
-            if executed_actions.count(action_sig) >= 2:
-                action = "tool"
-            executed_actions.append(action_sig)
-
-            # RAG Branch
-            if action == "rag":
-                logger.info(f"RAG Retrieval: {action_input}")
-                rag_result = ""
-                # For sync, we collect the stream
-                for event in self.rag_chain.stream({"input": action_input, "chat_history": messages}):
-                    if isinstance(event, dict) and "answer" in event:
-                        rag_result += event["answer"]
-                
-                messages.append(AIMessage(content=f"[INTERNAL_RETRIEVED_CONTEXT] {rag_result}"))
-                continue 
-
-            # TOOL Branch
-            if action == "tool":
-                response = self.llm_with_tools.invoke(messages)
-                messages.append(response)
-                
-                if not response.tool_calls:
-                    if turn > 1: action = "final"
-                    else: continue
-
-                for tool_call in response.tool_calls:
-                    tool_name, tool_args, tool_id = tool_call["name"], tool_call["args"], tool_call["id"]
-                    logger.info(f"Executing: {tool_name}")
-                    result = self.execute_tool(tool_name, tool_args)
-                    messages.append(ToolMessage(content=result, tool_call_id=tool_id))
-                
-                continue
-
-            # FINAL Branch
-            if action == "final":
-                final_answer = action_input or "Task completed."
-                return final_answer, messages
-
-        return "Error: Maximum turns reached.", messages
-
-# Example usage (for testing)
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    engine = QueryEngine(permission_mode="ASK")
-    
-    # Example: Searching for a function
-    # Note: ensure your rag_chain is populated before testing
-    answer, history = engine.process_query("Search for the 'ingest_all.py' script and tell me its purpose.")
-    print(f"\nFinal Answer:\n{answer}")
 

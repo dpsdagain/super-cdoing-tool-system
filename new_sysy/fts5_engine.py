@@ -1,42 +1,30 @@
+"""
+fts5_engine.py — On-disk Full Text Search engine using SQLite FTS5.
+Replaces the RAM-heavy rank_bm25 with incremental, disk-based BM25 indexing.
+"""
 from __future__ import annotations
-import fnmatch
 import hashlib
 import logging
 import os
-import tempfile
-import pickle
 import threading
 import sqlite3
 import json
-import ast as _ast
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
-from typing import BinaryIO, Callable, Any
-import nltk
-from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
-from langchain_community.document_loaders import (
-    PyPDFLoader,
-    TextLoader,
-)
 from langchain_core.documents import Document
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
-import tree_sitter_languages
-from tree_sitter import Node
-from config import (
-    EMBEDDING_MODEL_NAME,
-    CHUNK_SIZE,
-    CHUNK_OVERLAP,
-    CODE_CHUNK_SIZE,
-    PDF_CHUNK_SIZE,
-    CHROMA_DB_DIR,
-    CODE_EXTENSIONS,
-    EXCLUDED_FILE_PATTERNS,
-    ZERO_CHUNK_THRESHOLD,
-)
+from config import CHROMA_DB_DIR
 
-import logging
 logger = logging.getLogger(__name__)
+
+# Thread-local storage for SQLite connections (one per thread)
+_sqlite_connections = threading.local()
+
+# Global lock for FTS5 write serialization
+_FTS5_GLOBAL_LOCK = threading.Lock()
+
+
+def _content_hash(doc: Document) -> str:
+    """Return a SHA-256 hex digest of a document's page_content only."""
+    return hashlib.sha256(doc.page_content.encode("utf-8")).hexdigest()
+
 
 class SQLiteFTS5BM25:
     """
@@ -46,11 +34,12 @@ class SQLiteFTS5BM25:
     """
     def __init__(self, collection_name: str):
         self.db_path = os.path.join(CHROMA_DB_DIR, f"{collection_name}_fts5.db")
+        self._lock = _FTS5_GLOBAL_LOCK
         self._init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
         """Return a thread-local reusable connection."""
-        if not hasattr(_sqlite_connections, "conn"):
+        if not hasattr(_sqlite_connections, "conn") or _sqlite_connections.conn is None:
             # Use high timeout and write-ahead logging (WAL) for better concurrency
             conn = sqlite3.connect(self.db_path, timeout=30.0, check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL")
@@ -107,13 +96,12 @@ class SQLiteFTS5BM25:
         
     def close(self):
         """Explicitly close the connection (thread-local cleanup handled manually if needed)."""
-        if hasattr(_sqlite_connections, "conn"):
+        if hasattr(_sqlite_connections, "conn") and _sqlite_connections.conn is not None:
             try:
                 _sqlite_connections.conn.close()
-                del _sqlite_connections.conn
+                _sqlite_connections.conn = None
             except Exception:
                 pass
-                self._conn = None
 
     def search(self, query: str, k: int = 10) -> list[Document]:
         """Fast keyword search via SQLite FTS5."""
@@ -131,7 +119,6 @@ class SQLiteFTS5BM25:
             conn = self._get_conn()
             try:
                 # Use BM25 scoring via FTS5 'rank'
-                # Extended query: match content OR source_name OR calls OR constants
                 rows = conn.execute(
                     "SELECT content, metadata_json FROM docs_fts WHERE docs_fts MATCH ? ORDER BY rank LIMIT ?",
                     (clean_query, k)
@@ -223,12 +210,9 @@ class SQLiteFTS5BM25:
             for i in range(0, len(hash_list), 900):
                 batch = hash_list[i:i+900]
                 placeholders = ",".join("?" * len(batch))
-                # JOIN or simple lookup? Lookup is safer for virtual tables.
                 cursor = conn.execute(f"SELECT rowid_ref FROM hashes WHERE content_hash IN ({placeholders})", batch)
                 stale_rowids.extend([r[0] for r in cursor.fetchall() if r[0] is not None])
             if stale_rowids:
-                # Batch DELETE via IN(...) placeholders — one statement per
-                # table instead of N round-trips. Chunked to max 900 params.
                 for i in range(0, len(stale_rowids), 900):
                     batch = stale_rowids[i:i+900]
                     placeholders = ",".join("?" * len(batch))
@@ -240,4 +224,3 @@ class SQLiteFTS5BM25:
                     conn.execute(f"DELETE FROM hashes WHERE content_hash IN ({hph})", batch)
                 conn.commit()
                 logger.info("FTS5: Deleted %d stale entries.", len(stale_rowids))
-

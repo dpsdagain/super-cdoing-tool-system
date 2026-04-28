@@ -1,70 +1,34 @@
+"""
+llm_factory.py — LLM Model Factory and Cache-Capability Utilities.
+Provides get_llm(), ModelFactory, and cache-profile helpers.
+"""
 from __future__ import annotations
-import re
 import threading
-import numpy as np
-from concurrent.futures import ThreadPoolExecutor
 import logging
 from langchain_community.chat_models import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
-from langchain_chroma import Chroma
 from config import (
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
     DEFAULT_MODEL,
-    CLOUDROUTER_MODELS,
-    OLLAMA_BASE_URL,
-    OLLAMA_MODELS,
     LLM_TEMPERATURE,
-    RETRIEVER_K,
     MAX_TOKENS,
     ANTHROPIC_CACHE_BETA_HEADER,
     ENABLE_PROMPT_CACHING,
-    ENABLE_AUTO_SPECIALIST,
     MAX_CACHE_CHECKPOINTS,
-    SEMANTIC_CACHE_THRESHOLD,
-    SENTINEL_MAX_TOKENS,
-    SENTINEL_TOKEN_THRESHOLD,
-    SENTINEL_INTERVAL,
-    TRUST_NATIVE_CACHE,
     PROVIDER_CACHE_PROFILES,
-    ENABLE_HYBRID_SEARCH,
-    BM25_WEIGHT,
-    VECTOR_WEIGHT,
-    USE_RERANKER,
-    RERANK_MODEL,
-    RERANK_TOP_K,
-    RERANK_CANDIDATES,
-    PINNED_RELEVANCE_THRESHOLD,
-    STICKY_PINNED_CONTEXT,
-    SPECIALIST_MAPPING,
-    GHOST_HISTORY_WINDOW,
-    GHOST_HISTORY_MAX,
-    AI_RESPONSE_MAX_CHARS,
-    GHOST_AI_CHARS,
-    MAX_HISTORY_TOKENS,
-    MAX_ZERO_CHUNK_CHARS,
-    AGENT_ROUTER_MODEL,
+    OLLAMA_BASE_URL,
     OLLAMA_PREFIX,
     OLLAMA_CLOUD_API_KEY,
     OLLAMA_CLOUD_BASE_URL,
     OLLAMA_CLOUD_PREFIX,
 )
-from estimator import ContextEstimator
-from langchain_core.messages import (
-    HumanMessage,
-    AIMessage,
-    BaseMessage,
-)
-from langchain_core.documents import Document
-from sentence_transformers import CrossEncoder
-from backend import SQLiteFTS5BM25
-import atexit as _atexit
-import functools
 
-import logging
-import numpy as np
 logger = logging.getLogger(__name__)
+
+_llm_cache: dict = {}
+_llm_cache_lock = threading.Lock()
+
 
 def is_cache_capable(model: str | None) -> bool:
     """
@@ -122,6 +86,7 @@ def get_llm(
     model: str | None = None,
     temperature: float | None = None,
     streaming: bool = True,
+    max_tokens: int | None = None,
 ):
     """
     Return a chat model instance.
@@ -131,9 +96,10 @@ def get_llm(
     OpenRouter.
     """
     temp = temperature if temperature is not None else LLM_TEMPERATURE
+    final_max_tokens = max_tokens if max_tokens is not None else MAX_TOKENS
     
-    # 🚀 Cache Check (thread-safe)
-    cache_key = (model, temp, streaming)
+    # Cache Check (thread-safe)
+    cache_key = (model, temp, streaming, final_max_tokens)
     with _llm_cache_lock:
         if cache_key in _llm_cache:
             return _llm_cache[cache_key]
@@ -150,7 +116,7 @@ def get_llm(
             base_url=OLLAMA_BASE_URL,
             model=ollama_model_name,
             temperature=temp,
-            num_predict=MAX_TOKENS,
+            num_predict=final_max_tokens,
         ))
 
     # ── Ollama Cloud path ──────────────────────────────────────────────
@@ -167,7 +133,7 @@ def get_llm(
             model=cloud_model_name,
             temperature=temp,
             streaming=streaming,
-            max_tokens=MAX_TOKENS,
+            max_tokens=final_max_tokens,
         ))
 
     # ── OpenRouter path ────────────────────────────────────────────────
@@ -176,7 +142,7 @@ def get_llm(
             "OPENROUTER_API_KEY is not set. "
             "Create a .env file with: OPENROUTER_API_KEY=sk-or-v1-..."
         )
-    # 🚀 Professional Polish: Conditional Header Safety
+    # Professional Polish: Conditional Header Safety
     # Only send Anthropic-specific headers when using a Claude model
     default_headers = {
         "HTTP-Referer": "http://localhost:8501",
@@ -195,7 +161,49 @@ def get_llm(
         streaming=streaming,
         max_tokens=MAX_TOKENS,
         default_headers=default_headers,
-        # 🚀 Enable usage in stream for telemetry visibility
+        # Enable usage in stream for telemetry visibility
         model_kwargs={"stream_options": {"include_usage": True}}
     ))
 
+
+class ModelFactory:
+    SEMANTIC_ALIASES = {
+        'best': 'ollama-cloud:gpt-oss:120b-cloud',
+        'fast': 'google/gemini-2.0-flash-001',
+        'coder': 'ollama-cloud:qwen3.6-coder:32b-cloud',
+        'reasoning': 'liquid/lfm-2.5-1.2b-thinking:free',
+        'haiku': 'google/gemma-4-26b-a4b-it:free',
+        'opus': 'ollama-cloud:gpt-oss:120b-cloud'
+    }
+
+    @staticmethod
+    def resolve_alias(model_id: str) -> str:
+        id_lower = model_id.lower()
+        has_1m = '[1m]' in id_lower
+        clean_id = id_lower.replace('[1m]', '')
+        
+        resolved = ModelFactory.SEMANTIC_ALIASES.get(clean_id, model_id)
+        return f'{resolved}[1m]' if has_1m else resolved
+
+    @staticmethod
+    def create_model(model_id: str = None, temperature: float = 0.0):
+        target_id = ModelFactory.resolve_alias(model_id or DEFAULT_MODEL)
+        
+        max_tokens = 4096
+        if '[1m]' in target_id:
+            logger.info('Engaging Extended Context Mode')
+            max_tokens = 16384
+            target_id = target_id.replace('[1m]', '')
+
+        logger.info(f'ModelFactory: Sourcing {target_id} via llm_factory')
+        
+        try:
+            return get_llm(model=target_id, temperature=temperature, streaming=True, max_tokens=max_tokens)
+        except Exception as e:
+            logger.error(f'ModelFactory failover engaging: {e}')
+            return get_llm(model='anthropic/claude-3-haiku', temperature=0.0, streaming=True, max_tokens=max_tokens)
+
+    @staticmethod
+    def list_available_categories():
+        from config import CLOUDROUTER_MODELS
+        return CLOUDROUTER_MODELS

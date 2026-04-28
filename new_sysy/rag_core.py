@@ -1,38 +1,32 @@
+"""
+rag_core.py — Retrieval-Augmented Generation Query Pipeline.
+
+Handles:
+  - OpenRouter LLM configuration
+  - ChromaDB retriever setup
+  - LangChain retrieval chain construction
+"""
 from __future__ import annotations
 import re
 import threading
-import numpy as np
-from concurrent.futures import ThreadPoolExecutor
 import logging
-from langchain_community.chat_models import ChatOllama
+import atexit as _atexit
+from concurrent.futures import ThreadPoolExecutor
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
+from langchain_core.documents import Document
 from langchain_chroma import Chroma
 from config import (
-    OPENROUTER_API_KEY,
-    OPENROUTER_BASE_URL,
-    DEFAULT_MODEL,
-    CLOUDROUTER_MODELS,
-    OLLAMA_BASE_URL,
-    OLLAMA_MODELS,
-    LLM_TEMPERATURE,
     RETRIEVER_K,
-    MAX_TOKENS,
-    ANTHROPIC_CACHE_BETA_HEADER,
     ENABLE_PROMPT_CACHING,
     ENABLE_AUTO_SPECIALIST,
-    MAX_CACHE_CHECKPOINTS,
     SEMANTIC_CACHE_THRESHOLD,
-    SENTINEL_MAX_TOKENS,
     SENTINEL_TOKEN_THRESHOLD,
     SENTINEL_INTERVAL,
-    TRUST_NATIVE_CACHE,
-    PROVIDER_CACHE_PROFILES,
     ENABLE_HYBRID_SEARCH,
-    BM25_WEIGHT,
-    VECTOR_WEIGHT,
+    AGENT_ROUTER_MODEL,
+    OLLAMA_PREFIX,
     USE_RERANKER,
-    RERANK_MODEL,
     RERANK_TOP_K,
     RERANK_CANDIDATES,
     PINNED_RELEVANCE_THRESHOLD,
@@ -44,56 +38,22 @@ from config import (
     GHOST_AI_CHARS,
     MAX_HISTORY_TOKENS,
     MAX_ZERO_CHUNK_CHARS,
-    AGENT_ROUTER_MODEL,
-    OLLAMA_PREFIX,
-    OLLAMA_CLOUD_API_KEY,
-    OLLAMA_CLOUD_BASE_URL,
-    OLLAMA_CLOUD_PREFIX,
 )
 from estimator import ContextEstimator
-from langchain_core.messages import (
-    HumanMessage,
-    AIMessage,
-    BaseMessage,
-)
-from langchain_core.documents import Document
-from sentence_transformers import CrossEncoder
-from backend import SQLiteFTS5BM25
-import atexit as _atexit
-import functools
+from backend import load_existing_chroma
 
-import logging
-import numpy as np
 logger = logging.getLogger(__name__)
 
 from prompt_builder import CORE_INSTRUCTIONS
 from llm_factory import is_cache_capable, get_cache_profile, format_message_content, get_llm
-from search_engine import _get_pinned_embedding, get_reranker, hybrid_search, calculate_cosine_similarity, _sort_docs_deterministically
-from cache_engine import SemanticCache, get_semantic_cache, reset_semantic_cache
-from intent_router import VectorRouter, get_router
-
-"""
-rag_chain.py — Retrieval-Augmented Generation Query Pipeline.
-
-Handles:
-  • OpenRouter LLM configuration (free model by default)
-  • ChromaDB retriever setup
-  • LangChain retrieval chain construction
-"""
-
-logger = logging.getLogger(__name__)
-
-_llm_cache = {}
-
-_llm_cache_lock = threading.Lock()
+from search_engine import _get_pinned_embedding, get_reranker, hybrid_search, calculate_cosine_similarity, _sort_docs_deterministically, _rewrite_executor
+from cache_engine import get_semantic_cache, reset_semantic_cache
+from intent_router import get_router
 
 MAX_CONTEXT_UNION = 15
 
 _background_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sentinel")
-
 _atexit.register(_background_executor.shutdown, wait=False)
-
-_atexit.register(_rewrite_executor.shutdown, wait=False)
 
 def _background_summarize(history: list[BaseMessage]):
     """Background task to update sentinel state without stalling the main stream."""

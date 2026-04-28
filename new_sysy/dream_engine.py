@@ -61,5 +61,5 @@ class DreamEngine:
             with open(self.memory_file, "r", encoding="utf-8") as f:
                 content = f.read()
             return f"\n--- PROJECT MEMORIES (Lessons from previous dreams) ---\n{content}\n"
-        except:
+        except Exception:
             return ""

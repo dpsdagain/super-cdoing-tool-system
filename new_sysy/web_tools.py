@@ -1,12 +1,12 @@
+"""
+web_tools.py — Web Search and URL Fetching Tools.
+"""
 import os
-import threading
 import logging
-from typing import List, Optional, Dict, Any
+from typing import Optional
 from pydantic import BaseModel, Field
-from tool_registry import tool, validate_path, current_engine
-from config import WORKSPACE_ROOT
-logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
 
 
 class WebSearchInput(BaseModel):
@@ -15,11 +15,10 @@ class WebSearchInput(BaseModel):
 class WebFetchInput(BaseModel):
     url: str = Field(description='The URL of the page to fetch and read.')
 
-@tool
-def read_url(url: str, prompt: Optional[str]=None) -> str:
-    """Fetch and distill content from a URL (F-10 Parity). Best for reading documentation websites."""
+
+def read_url(url: str, prompt: Optional[str] = None) -> str:
+    """Fetch and distill content from a URL. Best for reading documentation websites."""
     from web_utils import WebFetcher
-    import json
     results = WebFetcher.fetch_markdown(url, prompt)
     if 'error' in results:
         return f"Error fetching URL: {results['error']}"
@@ -59,12 +58,29 @@ def web_search(query: str) -> str:
     except Exception as e:
         return f'Error performing web search: {str(e)}'
 
+def is_safe_url(url: str) -> bool:
+    """Check if a URL is safe (not loopback/private)."""
+    try:
+        from urllib.parse import urlparse
+        import ipaddress
+        import socket
+        parsed = urlparse(url)
+        if parsed.scheme not in ('http', 'https'): return False
+        if not parsed.hostname: return False
+        ip = socket.gethostbyname(parsed.hostname)
+        ip_obj = ipaddress.ip_address(ip)
+        if ip_obj.is_loopback or ip_obj.is_private:
+            return False
+        return True
+    except Exception:
+        return False
+
 def web_fetch(url: str) -> str:
+    """Fetch webpage content with improved extraction and noise reduction."""
     if not is_safe_url(url):
         return 'Error: Access to local or private network addresses is restricted.'
     import requests
     import re
-    'Fetch webpage content with improved extraction and noise reduction.'
     try:
         from bs4 import BeautifulSoup
         has_bs4 = True
@@ -82,8 +98,8 @@ def web_fetch(url: str) -> str:
             if not main_content:
                 main_content = soup.find('div', class_=re.compile('content|main|body', re.I))
             text = (main_content or soup).get_text(separator='\n')
-            text = resp.text
         else:
+            text = resp.text
             text = re.sub('<script.*?</script>', '', text, flags=re.DOTALL | re.IGNORECASE)
             text = re.sub('<style.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
             text = re.sub('<.*?>', ' ', text)

@@ -22,7 +22,6 @@ if _fast_path_latency > 50:
 
 import logging
 import argparse
-import time
 import os
 import re
 import threading
@@ -217,7 +216,7 @@ class AgentCLI:
                     new_model = query.replace("/model ", "").strip()
                     with console.status(f"{INDENT}[status]Switching to {new_model}...[/status]"):
                         while not self.is_ready: time.sleep(0.1) # Wait if still booting
-                        self.engine = QueryEngine(model=new_model, permission_mode=self.engine.permission_manager.mode)
+                        self.engine = QueryEngine(model_id=new_model, permission_mode=self.engine.permission_manager.mode)
                         self.engine.permission_callback = self.permission_callback
                         self.model_id = new_model
                     console.print(f"{INDENT}✅ Model switched to [bold blue]{self.model_id}[/]")
@@ -326,7 +325,7 @@ class AgentCLI:
                         ), pad=True))
                         
                         answer = self.prompt_session.prompt(
-                            HTML(f'<b><ansigellow>{USER_ICON} Answer</ansigellow></b> > '),
+                            HTML(f'<b><ansiyellow>{USER_ICON} Answer</ansiyellow></b> > '),
                             style=self.pt_style
                         ).strip()
                         

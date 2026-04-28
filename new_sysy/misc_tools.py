@@ -1,13 +1,23 @@
+"""
+misc_tools.py — Miscellaneous Agent Tools.
+switch_model, update_plan, set_status, cost_report, system_doctor,
+notebook_edit, undo_last_edit, linter, memory, arch_visualizer,
+undercover_mode, task_budget, ask_user.
+"""
 import os
-import threading
+import subprocess
 import logging
-from typing import List, Optional, Dict, Any
+from typing import Optional
 from pydantic import BaseModel, Field
-from tool_registry import tool, validate_path, current_engine
+from tool_registry import validate_path
 from config import WORKSPACE_ROOT
+
 logger = logging.getLogger(__name__)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  Pydantic Input Schemas
+# ═══════════════════════════════════════════════════════════════════════════
 
 class SwitchModelInput(BaseModel):
     model_id: str = Field(..., description="The ID of the model to switch to (e.g., 'ollama-cloud:gpt-oss:120b-cloud').")
@@ -34,21 +44,43 @@ class ArchVisualizerInput(BaseModel):
 class TaskBudgetInput(BaseModel):
     max_tokens: int = Field(description='The maximum number of tokens allowed for this task.')
 
+class LinterInput(BaseModel):
+    file_path: str = Field(description='The path to the file to lint.')
+
+class MemoryInput(BaseModel):
+    fact: str = Field(description='The fact or preference to save to long-term memory.')
+
+class UndercoverInput(BaseModel):
+    text: str = Field(description='The text to strip AI identifiers and local paths from.')
+
+class CostInput(BaseModel):
+    """No arguments needed — generates cost report from session data."""
+    pass
+
+class DoctorInput(BaseModel):
+    """No arguments needed — runs full system diagnostics."""
+    pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Tool Functions
+# ═══════════════════════════════════════════════════════════════════════════
+
 def switch_model(model_id: str) -> str:
     """Reboots the agent with a new LLM engine. All conversation context is preserved."""
     return f'[MODEL_SWITCHED] {model_id}'
 
 def update_plan(plan: str) -> str:
-    """Synthetic Tool: Update your internal master plan. Use this to track progress, rejected ideas, and next steps."""
+    """Synthetic Tool: Update your internal master plan."""
     return f'[PLAN_UPDATED] {plan}'
 
 def set_status(status: str) -> str:
-    """Sets the current activity status for the TUI (e.g. 'Analyzing index...')."""
+    """Sets the current activity status for the TUI."""
     return f'[STATUS_UPDATED] {status}'
 
-@tool
 def cost_report() -> str:
-    """Generate a high-precision session cost report (F-18 Parity). Shows token usage and USD cost."""
+    """Generate a high-precision session cost report. Shows token usage and USD cost."""
+    from tool_registry import current_engine
     try:
         if not current_engine.instance or not current_engine.instance.usage_tracker:
             return 'Error: Usage Tracker not initialized.'
@@ -56,9 +88,8 @@ def cost_report() -> str:
     except Exception as e:
         return f'Error generating cost report: {str(e)}'
 
-@tool
 def system_doctor() -> str:
-    """Perform a full environmental diagnostic check (F-44 Parity). Audits binaries, network, and workspace toxicity."""
+    """Perform a full environmental diagnostic check. Audits binaries, network, and workspace toxicity."""
     from doctor import SystemDoctor
     import json
     try:
@@ -67,9 +98,8 @@ def system_doctor() -> str:
     except Exception as e:
         return f'Error running diagnostics: {str(e)}'
 
-@tool
 def notebook_edit(file_path: str, cell_id: str, new_source: str, edit_mode: str='replace', cell_type: str='code') -> str:
-    """Surgically edit a Jupyter Notebook cell (F-12 Parity). Resets execution state on modified cells."""
+    """Surgically edit a Jupyter Notebook cell. Resets execution state on modified cells."""
     from notebook_utils import NotebookMutator
     try:
         file_path = validate_path(file_path)
@@ -78,7 +108,8 @@ def notebook_edit(file_path: str, cell_id: str, new_source: str, edit_mode: str=
     return NotebookMutator.edit(file_path, cell_id, new_source, edit_mode, cell_type)
 
 def undo_last_edit(message_id: str) -> str:
-    """Roll back file changes made in a specific turn (F-28 Parity)."""
+    """Roll back file changes made in a specific turn."""
+    from tool_registry import current_engine
     try:
         if not current_engine.instance or not current_engine.instance.history_manager:
             return 'Error: History Manager not initialized.'

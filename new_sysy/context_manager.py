@@ -22,7 +22,7 @@ class ContextManager:
         # Layer 5: Emergency Summarizer (Dependency Injected)
         if summarizer_llm is None:
             # Fallback for backward compatibility
-            from model_factory import ModelFactory
+            from llm_factory import ModelFactory
             self.summarizer_llm = ModelFactory.create_model("ollama-cloud:gemma2:9b-cloud", temperature=0.0)
         else:
             self.summarizer_llm = summarizer_llm
@@ -126,7 +126,8 @@ class ContextManager:
         git_status = "Unknown"
         try:
             git_status = subprocess.check_output(["git", "status", "--short"], stderr=subprocess.STDOUT).decode()
-        except: pass
+        except Exception:
+            pass
         
         discovered_skills = set()
         for m in messages:
@@ -163,5 +164,5 @@ class ContextManager:
         try:
             res = self.summarizer_llm.invoke([SystemMessage(content=prompt), HumanMessage(content=history)])
             return res.content
-        except:
+        except Exception:
             return "History summarized."

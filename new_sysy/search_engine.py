@@ -1,72 +1,33 @@
+"""
+search_engine.py — Hybrid Search (BM25 + Vector) and Cross-Encoder Re-ranking.
+"""
 from __future__ import annotations
 import re
 import threading
-import numpy as np
-from concurrent.futures import ThreadPoolExecutor
+import functools
 import logging
-from langchain_community.chat_models import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_openai import ChatOpenAI
+from concurrent.futures import ThreadPoolExecutor
+import atexit as _atexit
+import numpy as np
 from langchain_chroma import Chroma
+from langchain_core.documents import Document
+from sentence_transformers import CrossEncoder
+from backend import SQLiteFTS5BM25
 from config import (
-    OPENROUTER_API_KEY,
-    OPENROUTER_BASE_URL,
-    DEFAULT_MODEL,
-    CLOUDROUTER_MODELS,
-    OLLAMA_BASE_URL,
-    OLLAMA_MODELS,
-    LLM_TEMPERATURE,
-    RETRIEVER_K,
-    MAX_TOKENS,
-    ANTHROPIC_CACHE_BETA_HEADER,
-    ENABLE_PROMPT_CACHING,
-    ENABLE_AUTO_SPECIALIST,
-    MAX_CACHE_CHECKPOINTS,
-    SEMANTIC_CACHE_THRESHOLD,
-    SENTINEL_MAX_TOKENS,
-    SENTINEL_TOKEN_THRESHOLD,
-    SENTINEL_INTERVAL,
-    TRUST_NATIVE_CACHE,
-    PROVIDER_CACHE_PROFILES,
     ENABLE_HYBRID_SEARCH,
     BM25_WEIGHT,
     VECTOR_WEIGHT,
     USE_RERANKER,
     RERANK_MODEL,
     RERANK_TOP_K,
-    RERANK_CANDIDATES,
-    PINNED_RELEVANCE_THRESHOLD,
-    STICKY_PINNED_CONTEXT,
-    SPECIALIST_MAPPING,
-    GHOST_HISTORY_WINDOW,
-    GHOST_HISTORY_MAX,
-    AI_RESPONSE_MAX_CHARS,
-    GHOST_AI_CHARS,
-    MAX_HISTORY_TOKENS,
-    MAX_ZERO_CHUNK_CHARS,
-    AGENT_ROUTER_MODEL,
-    OLLAMA_PREFIX,
-    OLLAMA_CLOUD_API_KEY,
-    OLLAMA_CLOUD_BASE_URL,
-    OLLAMA_CLOUD_PREFIX,
+    RETRIEVER_K,
 )
-from estimator import ContextEstimator
-from langchain_core.messages import (
-    HumanMessage,
-    AIMessage,
-    BaseMessage,
-)
-from langchain_core.documents import Document
-from sentence_transformers import CrossEncoder
-from backend import SQLiteFTS5BM25
-import atexit as _atexit
-import functools
 
-import logging
-import numpy as np
 logger = logging.getLogger(__name__)
 
 _rewrite_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rewrite")
+_atexit.register(_rewrite_executor.shutdown, wait=False)
+
 
 def _get_pinned_embedding(pinned_prefix: str) -> list[float]:
     """Return a cached embedding for the pinned content prefix. Thread-safe."""
@@ -91,8 +52,6 @@ def hybrid_search(
     """
     if not ENABLE_HYBRID_SEARCH:
         # Fallback to standard vector search.
-        # fetch_k is an MMR-only parameter and is not supported by
-        # similarity_search / similarity_search_by_vector — omit it.
         chroma_filter = None
         if exclude_file:
             chroma_filter = {"source": {"$ne": exclude_file}}
@@ -100,9 +59,7 @@ def hybrid_search(
             return db.similarity_search_by_vector(query_embedding, k=k, filter=chroma_filter)
         return db.similarity_search(query, k=k, filter=chroma_filter)
 
-    # Build a ChromaDB metadata filter from the caller's exclusion criteria so
-    # the vector store never fetches docs that will be thrown away post-fetch.
-    # BM25 has no filter API — _rank_docs() still handles that side.
+    # Build a ChromaDB metadata filter from the caller's exclusion criteria
     _conditions: list[dict] = []
     if exclude_file:
         _conditions.append({"source": {"$ne": exclude_file}})
@@ -115,20 +72,17 @@ def hybrid_search(
     else:
         _chroma_filter = {"$and": _conditions}
 
-    # 1. 🔍 Vector Search (Semantic)
-    # We fetch a larger candidate pool for RRF to merge.
-    # Reuse pre-computed embedding when available to avoid double-embedding.
+    # 1. Vector Search (Semantic)
     if query_embedding:
         vector_docs = db.similarity_search_by_vector(query_embedding, k=k*3, filter=_chroma_filter)
     else:
         vector_docs = db.similarity_search(query, k=k*3, filter=_chroma_filter)
     
-    # 2. 🔍 BM25 Keyword Search (Transitioned to SQLite FTS5)
+    # 2. BM25 Keyword Search (SQLite FTS5)
     with SQLiteFTS5BM25(collection_name) as fts:
-        # Note: SQLite search internalizes metadata filtering for better performance
         bm25_docs = fts.search(query, k=k*3)
     
-    # Apply remaining excludes that are not yet in FTS SQL query
+    # Apply remaining excludes
     if exclude_file or filter_extensions:
         bm25_docs = [
             d for d in bm25_docs
@@ -136,11 +90,10 @@ def hybrid_search(
             and not (filter_extensions and d.metadata.get("file_extension") not in filter_extensions)
         ]
 
-    # 3. 🧪 Reciprocal Rank Fusion (RRF)
-    # RRF Score(d) = sum(1 / (k + rank))
+    # 3. Reciprocal Rank Fusion (RRF)
     RRF_K = 60
-    scores = {} # {doc_id: score}
-    doc_map = {} # {doc_id: doc_object}
+    scores = {}
+    doc_map = {}
     
     def _rank_docs(docs, weight=1.0):
         for rank, doc in enumerate(docs):
@@ -149,7 +102,6 @@ def hybrid_search(
             if filter_extensions and doc.metadata.get("file_extension") not in filter_extensions:
                 continue
                 
-            # 🚀 Fix: Use content excerpt to prevent collisions on zero-chunk docs with missing hashes
             doc_id = (
                 doc.metadata.get("source"),
                 doc.metadata.get("chunk_index", 0),
@@ -162,13 +114,8 @@ def hybrid_search(
     _rank_docs(vector_docs, weight=VECTOR_WEIGHT)
     _rank_docs(bm25_docs, weight=BM25_WEIGHT)
     
-    # Sort by merged RRF score
     sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
     rrf_results = [doc_map[did] for did in sorted_ids[:k]]
-
-    # Cross-encoder re-ranking is handled by LocalReRanker.rerank() in the
-    # caller — applying it here as well would score the same docs twice with
-    # the same model for zero quality gain.
 
     return rrf_results
 
@@ -191,7 +138,7 @@ class LocalReRanker:
         try:
             return CrossEncoder(RERANK_MODEL)
         except Exception as e:
-            logger.error(f"❌ Re-ranker failed to load: {e}")
+            logger.error(f"Re-ranker failed to load: {e}")
             return None
 
     def rerank(self, query: str, documents: list[Document], top_k: int) -> list[Document]:
@@ -199,24 +146,18 @@ class LocalReRanker:
         if not self.model or not documents:
             return documents[:top_k]
 
-        # Prepare pairs for cross-encoding (Query, Chunk)
         pairs = [[query, doc.page_content] for doc in documents]
         try:
             scores = self.model.predict(pairs)
-            
-            # Combine scores with docs and sort
             scored_docs = sorted(zip(scores, documents), key=lambda x: x[0], reverse=True)
-            
-            # 🚀 Phase 5: Store the top score for telemetry
             self.last_top_score = float(scored_docs[0][0]) if scored_docs else 0.0
             
-            # Log the top score for telemetry
             if scored_docs:
-                logger.info(f"🎯 Top Re-rank Relevance Score: {scored_docs[0][0]:.4f}")
+                logger.info(f"Top Re-rank Relevance Score: {scored_docs[0][0]:.4f}")
             
             return [doc for score, doc in scored_docs[:top_k]]
         except Exception as e:
-            logger.error(f"❌ Re-ranking execution failed: {e}")
+            logger.error(f"Re-ranking execution failed: {e}")
             return documents[:top_k]
 
 _reranker_instance = None
@@ -226,12 +167,12 @@ def get_reranker():
     global _reranker_instance
     if _reranker_instance is None and USE_RERANKER:
         with _reranker_lock:
-            if _reranker_instance is None:  # double-check after lock
+            if _reranker_instance is None:
                 try:
                     _reranker_instance = LocalReRanker()
-                    logger.info("✅ Reranker initialized (LocalReRanker)")
+                    logger.info("Reranker initialized (LocalReRanker)")
                 except Exception as e:
-                    logger.error(f"❌ Reranker init failed: {e}")
+                    logger.error(f"Reranker init failed: {e}")
     return _reranker_instance
 
 def _sort_docs_deterministically(
@@ -240,16 +181,6 @@ def _sort_docs_deterministically(
 ) -> list[Document]:
     """
     Prefix-Preserving Deterministic Sort.
-
-    When *stable_hashes* is provided (the content hashes of docs that were
-    already in the prompt on the previous turn), those docs sort FIRST
-    (``_is_new=0``), preserving the exact byte prefix that the provider
-    cache (Anthropic/Gemini) already stored.  New docs sort AFTER
-    (``_is_new=1``) so they append to the end of the block without
-    breaking the cached prefix.
-
-    Within each group the order is fully deterministic:
-    ``(source, chunk_index, content_hash, page_content)``.
     """
     def _sort_key(d):
         is_new = 0 if (
@@ -276,4 +207,3 @@ def calculate_cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
     if norm1 == 0 or norm2 == 0:
         return 0.0
     return float(np.dot(v1, v2) / (norm1 * norm2))
-

@@ -1,70 +1,22 @@
+"""
+intent_router.py — Zero-Latency Intent Classification & Specialist Detection.
+Handles FOLLOW-UP vs NEW classification and specialty routing.
+"""
 from __future__ import annotations
 import re
 import threading
-import numpy as np
-from concurrent.futures import ThreadPoolExecutor
 import logging
-from langchain_community.chat_models import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_openai import ChatOpenAI
-from langchain_chroma import Chroma
-from config import (
-    OPENROUTER_API_KEY,
-    OPENROUTER_BASE_URL,
-    DEFAULT_MODEL,
-    CLOUDROUTER_MODELS,
-    OLLAMA_BASE_URL,
-    OLLAMA_MODELS,
-    LLM_TEMPERATURE,
-    RETRIEVER_K,
-    MAX_TOKENS,
-    ANTHROPIC_CACHE_BETA_HEADER,
-    ENABLE_PROMPT_CACHING,
-    ENABLE_AUTO_SPECIALIST,
-    MAX_CACHE_CHECKPOINTS,
-    SEMANTIC_CACHE_THRESHOLD,
-    SENTINEL_MAX_TOKENS,
-    SENTINEL_TOKEN_THRESHOLD,
-    SENTINEL_INTERVAL,
-    TRUST_NATIVE_CACHE,
-    PROVIDER_CACHE_PROFILES,
-    ENABLE_HYBRID_SEARCH,
-    BM25_WEIGHT,
-    VECTOR_WEIGHT,
-    USE_RERANKER,
-    RERANK_MODEL,
-    RERANK_TOP_K,
-    RERANK_CANDIDATES,
-    PINNED_RELEVANCE_THRESHOLD,
-    STICKY_PINNED_CONTEXT,
-    SPECIALIST_MAPPING,
-    GHOST_HISTORY_WINDOW,
-    GHOST_HISTORY_MAX,
-    AI_RESPONSE_MAX_CHARS,
-    GHOST_AI_CHARS,
-    MAX_HISTORY_TOKENS,
-    MAX_ZERO_CHUNK_CHARS,
-    AGENT_ROUTER_MODEL,
-    OLLAMA_PREFIX,
-    OLLAMA_CLOUD_API_KEY,
-    OLLAMA_CLOUD_BASE_URL,
-    OLLAMA_CLOUD_PREFIX,
-)
-from estimator import ContextEstimator
-from langchain_core.messages import (
-    HumanMessage,
-    AIMessage,
-    BaseMessage,
-)
-from langchain_core.documents import Document
-from sentence_transformers import CrossEncoder
-from backend import SQLiteFTS5BM25
-import atexit as _atexit
-import functools
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
+from config import OLLAMA_PREFIX, AGENT_ROUTER_MODEL
 
-import logging
-import numpy as np
 logger = logging.getLogger(__name__)
+
+
+def get_llm(*args, **kwargs):
+    """Lazy import to avoid circular dependency with llm_factory."""
+    from llm_factory import get_llm as _get_llm
+    return _get_llm(*args, **kwargs)
+
 
 class VectorRouter:
     """
@@ -84,7 +36,6 @@ class VectorRouter:
         if not history:
             return "NEW"
 
-        import re
         q = query.lower().strip()
 
         # Fast-path: pronouns/demonstratives strongly indicate follow-up
@@ -115,8 +66,7 @@ class VectorRouter:
         except Exception:
             # Ollama is down — heuristic fallback: if the current query
             # shares significant content words with the last user message,
-            # it's likely a follow-up.  Defaulting to "NEW" here silently
-            # destroys context union for every follow-up when Ollama is off.
+            # it's likely a follow-up.
             last_user = ""
             for m in reversed(history):
                 if isinstance(m, HumanMessage):
@@ -138,12 +88,9 @@ class VectorRouter:
         Detect the best specialist for the query using robust regex word boundaries.
         Returns one of: ['CODE', 'REASONING', 'VISION', 'GENERAL']
         """
-        import re
         q = query.lower()
 
-        # 💻 Coding Specialist Triggers — checked BEFORE the short-question
-        # fast-path so "What is the best way to implement a function in Python?"
-        # correctly routes to CODE even though it starts with "what".
+        # Coding Specialist Triggers
         code_triggers = [
             r"code", r"python", r"javascript", r"verilog", r"function", r"class",
             r"refactor", r"bug", r"debug", r"compile", r"script", r"hdl", r"rtl",
@@ -157,12 +104,12 @@ class VectorRouter:
         if len(query) < 60 and re.match(r"^(what|where|who|when|which|is|does|can)\b", q):
             return "GENERAL"
 
-        # 👁️ Vision Triggers
+        # Vision Triggers
         vision_triggers = [r"image", r"plot", r"chart", r"diagram", r"vision", r"see this"]
         if any(re.search(rf"\b{t}\b", q) for t in vision_triggers):
             return "VISION"
             
-        # 🧠 Reasoning / Math Triggers
+        # Reasoning / Math Triggers
         reasoning_triggers = [
             r"analyze", r"logic", r"math", r"derive", r"prove", r"step by step",
             r"complex", r"calculate", r"deepseek", r"reason", r"philosophy", 
@@ -178,15 +125,13 @@ class VectorRouter:
     def _extractive_fallback(history: list[BaseMessage]) -> str:
         """
         Pure-Python extractive summary used when the local LLM (Ollama)
-        is unavailable.  Keeps the first sentence of each recent human
-        message to preserve topic continuity without any external calls.
+        is unavailable.
         """
         bullets = []
         for m in history[-8:]:
             if not isinstance(m, HumanMessage):
                 continue
             text = m.content.strip()
-            # Take the first sentence (up to first period, question mark, or 120 chars)
             end = len(text)
             for ch in ".?!":
                 idx = text.find(ch)
@@ -199,9 +144,8 @@ class VectorRouter:
 
     def summarize_state_fast(self, history: list[BaseMessage]) -> str:
         """
-        Summarize conversation state.  Tries the local Ollama model first;
-        falls back to a pure-Python extractive summary if Ollama is down
-        so history compression is never silently skipped.
+        Summarize conversation state. Tries the local Ollama model first;
+        falls back to a pure-Python extractive summary if Ollama is down.
         """
         try:
             llm = get_llm(model=f"{OLLAMA_PREFIX}{AGENT_ROUTER_MODEL}", temperature=0.0, streaming=False)
@@ -218,7 +162,6 @@ class VectorRouter:
             return self._extractive_fallback(history)
 
 _router_instance = None
-
 _router_lock = threading.Lock()
 
 def get_router():
@@ -227,4 +170,3 @@ def get_router():
         if _router_instance is None:
             _router_instance = VectorRouter()
         return _router_instance
-

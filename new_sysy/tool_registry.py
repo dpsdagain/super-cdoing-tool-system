@@ -1,35 +1,60 @@
+"""
+tool_registry.py — Centralized Tool Factory & Registry.
+All tools in the system must be registered through this module.
+"""
 import os
 import threading
 import logging
-from urllib.parse import urlparse
-import ipaddress
-from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
-from langchain_core.documents import Document
-from backend import load_existing_chroma, SQLiteFTS5BM25
-from rag_chain import hybrid_search, get_reranker
-from config import RETRIEVER_K, RERANK_TOP_K, USE_RERANKER, WORKSPACE_ROOT
-from permissions import PermissionManager
-import subprocess
-import subprocess
-import time
-import re
-import threading
-from queue import Queue, Empty
-
-import logging
-logger = logging.getLogger(__name__)
+from typing import Any, Dict
+from pathlib import Path
+from pydantic import BaseModel
+from config import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Explicit Imports (replacing wildcard imports)
+# ═══════════════════════════════════════════════════════════════════════════
+from file_tools import (
+    code_search, file_read, file_edit, file_write, multi_file_edit,
+    grep_tool, glob_tool, brief_tool, symbol_search,
+    CodeSearchInput, FileReadInput, FileEditInput, FileWriteInput,
+    MultiFileEditInput, GrepInput, GlobInput, BriefInput, SymbolSearchInput,
+    UndoInput,
+)
+from bash_tool import bash_tool, BashInput
+from web_tools import (
+    web_search, web_fetch, read_url,
+    WebSearchInput, WebFetchInput,
+)
+from git_tools import (
+    git_status, git_diff, git_commit, git_root, git_log,
+    GitStatusInput, GitDiffInput, GitCommitInput, GitLogInput,
+)
+from misc_tools import (
+    switch_model, update_plan, set_status, cost_report, system_doctor,
+    notebook_edit, undo_last_edit, linter_tool, memory_tool,
+    arch_visualizer, undercover_mode, task_budget, ask_user,
+    SwitchModelInput, UpdatePlanInput, SetStatusInput, NotebookEditInput,
+    AskUserInput, ArchVisualizerInput, TaskBudgetInput,
+    LinterInput, MemoryInput, UndercoverInput, CostInput, DoctorInput,
+)
+from agent_tools import agent_delegate, AgentDelegateInput
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Core Infrastructure
+# ═══════════════════════════════════════════════════════════════════════════
 
 class ToolMetadata(BaseModel):
     name: str
     description: str
     input_schema: Any
     func: Any
-    is_read_only: bool = False # Default: Fail-Closed (Assumed to modify data)
+    is_read_only: bool = False
     is_destructive: bool = False
     is_concurrency_safe: bool = False
+
 
 def build_tool(
     name: str, 
@@ -38,7 +63,7 @@ def build_tool(
     func: Any, 
     is_read_only: bool = False,
     is_destructive: bool = False,
-    is_concurrency_safe: bool = False
+    is_concurrency_safe: bool = False,
 ) -> Dict[str, Any]:
     """
     Centralized tool factory that enforces security defaults.
@@ -51,8 +76,9 @@ def build_tool(
         "func": func,
         "is_read_only": is_read_only,
         "is_destructive": is_destructive,
-        "is_concurrency_safe": is_concurrency_safe
+        "is_concurrency_safe": is_concurrency_safe,
     }
+
 
 class EngineContext(threading.local):
     def __init__(self):
@@ -60,15 +86,13 @@ class EngineContext(threading.local):
 
 current_engine = EngineContext()
 
+
 def validate_path(path: str) -> str:
     """Ensure the path is within the WORKSPACE_ROOT boundary using OS-level checks."""
-    from pathlib import Path
     try:
-        # Resolve to absolute, real path (handles .. and symlinks)
         target = Path(path).resolve()
         root = Path(WORKSPACE_ROOT).resolve()
         
-        # Check if target is inside root
         if not target.is_relative_to(root):
             raise PermissionError(f"Access Denied: Path '{target}' is outside the allowed workspace '{root}'.")
             
@@ -77,6 +101,11 @@ def validate_path(path: str) -> str:
         if isinstance(e, PermissionError):
             raise e
         raise PermissionError(f"Access Denied: Could not validate path '{path}'.")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Tool Registry
+# ═══════════════════════════════════════════════════════════════════════════
 
 _UNSORTED_TOOLS = {
     "code_search": build_tool(
@@ -296,14 +325,19 @@ _UNSORTED_TOOLS = {
         input_schema=CostInput,
         description="Show the current session's token usage and USD cost report.",
         is_read_only=True
-    )
+    ),
 }
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Partitioned Tool Sets
+# ═══════════════════════════════════════════════════════════════════════════
 
 CORE_TOOL_NAMES = {"file_read", "file_edit", "file_write", "multi_file_edit", "bash", "glob", "code_search", "grep_search"}
 
 core_partition = sorted([k for k in _UNSORTED_TOOLS if k in CORE_TOOL_NAMES])
-
 plugin_partition = sorted([k for k in _UNSORTED_TOOLS if k not in CORE_TOOL_NAMES])
 
+# Populate AVAILABLE_TOOLS from both partitions (core first, then plugins)
 AVAILABLE_TOOLS = {}
-
+for name in core_partition + plugin_partition:
+    AVAILABLE_TOOLS[name] = _UNSORTED_TOOLS[name]
