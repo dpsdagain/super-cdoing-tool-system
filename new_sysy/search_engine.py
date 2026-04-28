@@ -172,8 +172,54 @@ def hybrid_search(
 
     return rrf_results
 
-_reranker_instance = None
+class LocalReRanker:
+    """
+    Local Cross-Encoder "Critic" that re-scores retrieved chunks 
+    to ensure surgical precision before the context is passed to the LLM.
+    """
+    def __init__(self):
+        self.model = None
+        self._init_model()
 
+    def _init_model(self):
+        if USE_RERANKER:
+            self.model = self._get_cached_cross_encoder()
+
+    @staticmethod
+    @functools.lru_cache(maxsize=1)
+    def _get_cached_cross_encoder():
+        try:
+            return CrossEncoder(RERANK_MODEL)
+        except Exception as e:
+            logger.error(f"❌ Re-ranker failed to load: {e}")
+            return None
+
+    def rerank(self, query: str, documents: list[Document], top_k: int) -> list[Document]:
+        """Re-score and filter documents using the Cross-Encoder."""
+        if not self.model or not documents:
+            return documents[:top_k]
+
+        # Prepare pairs for cross-encoding (Query, Chunk)
+        pairs = [[query, doc.page_content] for doc in documents]
+        try:
+            scores = self.model.predict(pairs)
+            
+            # Combine scores with docs and sort
+            scored_docs = sorted(zip(scores, documents), key=lambda x: x[0], reverse=True)
+            
+            # 🚀 Phase 5: Store the top score for telemetry
+            self.last_top_score = float(scored_docs[0][0]) if scored_docs else 0.0
+            
+            # Log the top score for telemetry
+            if scored_docs:
+                logger.info(f"🎯 Top Re-rank Relevance Score: {scored_docs[0][0]:.4f}")
+            
+            return [doc for score, doc in scored_docs[:top_k]]
+        except Exception as e:
+            logger.error(f"❌ Re-ranking execution failed: {e}")
+            return documents[:top_k]
+
+_reranker_instance = None
 _reranker_lock = threading.Lock()
 
 def get_reranker():

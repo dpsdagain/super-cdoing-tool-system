@@ -288,11 +288,7 @@ class QueryEngine:
                     self.current_status = result.replace("[STATUS_UPDATED] ", "")
 
             # 🚀 SYSTEM 2: Result Budget Gate (Archiving)
-            offloaded_result = self.archive.maybe_offload(name, tool_id, result)
-            
-            # 🚀 SYSTEM 2: Working Memory Hydration
-            if name == "file_read" and isinstance(result, str):
-                self.context_manager.record_file_read(args.get("path", "unknown"), result)
+            offloaded_result = self.context_manager.result_archive.offload_if_large(name, str(result))
 
             return offloaded_result
         except Exception as e:
