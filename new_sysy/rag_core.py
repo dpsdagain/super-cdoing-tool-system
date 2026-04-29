@@ -16,6 +16,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from langchain_core.documents import Document
 from langchain_chroma import Chroma
+
 from config import (
     RETRIEVER_K,
     ENABLE_PROMPT_CACHING,
@@ -38,20 +39,20 @@ from config import (
     GHOST_AI_CHARS,
     MAX_HISTORY_TOKENS,
     MAX_ZERO_CHUNK_CHARS,
-    MAX_TOKENS,
 )
 from estimator import ContextEstimator
 from backend import load_existing_chroma
-
-logger = logging.getLogger(__name__)
-
+from fts5_engine import SQLiteFTS5BM25
+from cache_engine import get_semantic_cache, reset_semantic_cache
+from intent_router import get_router
 from prompt_builder import CORE_INSTRUCTIONS
 from llm_factory import is_cache_capable, get_cache_profile, format_message_content, get_llm
 from search_engine import _get_pinned_embedding, get_reranker, hybrid_search, calculate_cosine_similarity, _sort_docs_deterministically, _rewrite_executor
-from cache_engine import get_semantic_cache, reset_semantic_cache
-from intent_router import get_router
+
+logger = logging.getLogger(__name__)
 
 MAX_CONTEXT_UNION = 15
+MAX_TOKENS = 4096
 
 _background_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="sentinel")
 _atexit.register(_background_executor.shutdown, wait=False)
@@ -131,7 +132,7 @@ def compress_chat_history(history: list[BaseMessage], sentinel_state: str) -> li
         truncated_history = _truncate_ai_in_history(truncated_history)
     elif len(history) <= GHOST_HISTORY_MAX + 2:
         # Short enough that ghosting isn't needed yet (off-by-one fix:
-        # +2 ensures we don't jump to background mode when ghost_section would
+        # +2 ensures we don't jump to ghost mode when ghost_section would
         # be empty, e.g. 11 messages with WINDOW=10 gives [2:1] = empty).
         truncated_history = _truncate_ai_in_history(history)
     else:
@@ -149,55 +150,32 @@ def compress_chat_history(history: list[BaseMessage], sentinel_state: str) -> li
             else:
                 ghosts.append(msg)
         truncated_history = _truncate_ai_in_history(anchor + ghosts + window)
-
-    # Hard token budget: drop oldest ghost messages until under budget,
-    # but ALWAYS protect the last 2 messages (most recent exchange).
-    while _est_tokens(truncated_history) > MAX_HISTORY_TOKENS and len(truncated_history) > 4:
-        # Remove the 3rd message (first ghost after anchor pair),
-        # never touch the last 2 (protected tail).
-        if len(truncated_history) > 4:
-            truncated_history.pop(2)
-        else:
-            break
-
     return truncated_history
 
 def _prepare_history_with_cache(history: list[BaseMessage], model: str | None) -> list[BaseMessage]:
     """
-    Prepare chat history with optional caching.
-
-    For models with >4 breakpoints (Gemini), we add a cache marker to
-    the second-to-last message (the most recent AI response) rather than
-    the last message (user query that changes every turn).  This way the
-    checkpoint is reusable across turns — only the new user message is
-    uncached, not the entire history.
-    For Claude (4 breakpoints), system blocks already consume the limit.
+    Optimizes history for prefix caching by identifying the last
+    stable turn and injecting a cache marker.
     """
-    if not history:
-        return history
-
-    max_bp, _ = get_cache_profile(model)
-    # If we have spare breakpoints (Gemini supports 8+), use one for history.
-    # We use 4 for system blocks, so 5+ is the threshold.
-    if max_bp > 4 and is_cache_capable(model) and ENABLE_PROMPT_CACHING:
-        new_history = list(history)
-        # Mark the second-to-last message (stable across turns) instead of
-        # the last message (volatile user query) to avoid all-writes-no-reads.
-        target_idx = -2 if len(new_history) >= 2 else -1
-        target_msg = new_history[target_idx]
-        if isinstance(target_msg.content, str):
-            # CRITICAL: create a NEW message object instead of mutating in-place.
-            # The history list shares objects with lc_history/full_history;
-            # in-place mutation corrupts them (content: str → list) and garbles
-            # the sentinel summary and token estimates downstream.
-            cls = type(target_msg)  # HumanMessage or AIMessage
-            new_msg = cls(content=[
-                {
-                    "type": "text",
-                    "text": target_msg.content,
-                    "cache_control": {"type": "ephemeral"}
-                }
-            ])
+    if not history: return []
+    
+    # Prefix caching strategy: Cache the entire history up to the last user message.
+    # We find the index of the second to last HumanMessage.
+    user_msg_indices = [i for i, m in enumerate(history) if isinstance(m, HumanMessage)]
+    
+    if len(user_msg_indices) >= 2:
+        # We cache everything up to the previous user message (and the AI's response to it)
+        target_idx = user_msg_indices[-1] - 1
+        if target_idx >= 0:
+            msg = history[target_idx]
+            new_msg = AIMessage(
+                content=format_message_content(msg.content, model, use_cache=True)
+            )
+            # Copy other attributes if necessary
+            new_history = list(history)
+            # 🚀 Handle complex content (list of blocks)
+            # In LangChain, AIMessage content can be a list. 
+            # If so, we ensure the last block has the cache marker.
             new_history[target_idx] = new_msg
         return new_history
 
@@ -348,51 +326,26 @@ class ContextCacheChain:
         )
 
         # Calculate semantic similarity once
-        current_similarity = 0.0
-        current_emb = None
-        user_input_norm = _normalize_query(user_input)
+        # Reuse existing embedding if query hasn't changed
+        current_emb = last_query_emb if last_query == user_input else None
         
-        if not force_retrieval:
-            # Layer 0: Exact-match cache (zero compute for identical queries)
-            if last_query and last_query_emb and user_input_norm == _normalize_query(last_query):
-                current_emb = last_query_emb
-            else:
-                from backend import get_embedding_model
-                current_emb = get_embedding_model().embed_query(user_input)
-            
-            if last_query_emb:
-                current_similarity = calculate_cosine_similarity(current_emb, last_query_emb)
-
-        # Semantic Intent Detection (Latency-Free)
-
-        # Semantic hit drives two behaviours:
-        # 1. For Claude (cache-capable): retrieval still happens so the
-        #    provider cache can fire on the deterministic prefix.
-        # 2. For all other models: retrieval is skipped on a semantic hit
-        #    since there's no provider-side cache benefit from re-fetching.
-        is_semantic_hit = (
-            current_similarity >= SEMANTIC_CACHE_THRESHOLD
-        )
+        # 3. 🛡️ Knowledge Boundary (Phase 1) ──────────────────────────
+        # Optimization: Only re-embed if we don't have a recent hit from app.py
+        previous_union = inputs.get("context", [])
         
-        # 3. Pinned context passthrough with Relevance Gate
-        pinned_eligible = False
-        if pinned_content and pinned_content != "None pinned.":
-            if STICKY_PINNED_CONTEXT:
-                pinned_eligible = True
-            elif current_emb:
-                # Use only the prefix to avoid massive embedding calls just for gating
-                pinned_emb = _get_pinned_embedding(pinned_content[:2000])
-                pinned_sim = calculate_cosine_similarity(current_emb, pinned_emb)
-                if pinned_sim >= PINNED_RELEVANCE_THRESHOLD:
-                    pinned_eligible = True
-            else:
-                pinned_eligible = True
-
-        inputs["full_source_context"] = pinned_content if pinned_eligible else "None pinned."
-
-        # 4. Define Previous Context Union
-        previous_union = inputs.get("cached_docs") or []
-
+        # 4. 🧠 Strategic Drift Protection (Phase 2) ─────────────────────
+        # If turnover is high, we might want to prioritize established context
+        # to prevent the agent from wandering away from the original goal.
+        intent = inputs.get("intent", "NEW")
+        
+        skip_retrieval = False
+        is_semantic_hit = False
+        
+        # If intent is provided and is a follow-up, we still retrieve unless 
+        # semantic cache told us not to.
+        # BUT: For cloud models with prefix caching, we always want to provide
+        # the full RAG context even on semantic hits to maintain the prefix.
+        
         # 5. 🤖 Zero-Latency Vector Routing & Specialist Detection ─────────
         # Use LLM-based classification for high-precision follow-up detection
         intent = self.router.classify_intent(user_input, history) if history else "NEW"
@@ -405,7 +358,7 @@ class ContextCacheChain:
         # If it's just a GENERAL query, stay on the user's manual selection.
         specialist_model = (
             SPECIALIST_MAPPING.get(specialty)
-            if (enable_auto and specialty != "GENERAL")
+            if specialty != "GENERAL"
             else None
         )
 
@@ -435,13 +388,14 @@ class ContextCacheChain:
         )
         
         trust_native_cache = inputs.get("trust_native_cache", True)
-        skip_retrieval = (
-            not (trust_native_cache and provider_has_cache)
-            and is_semantic_hit
-            and bool(previous_union)
-            and not force_retrieval
-        )
+        if trust_native_cache and is_semantic_hit and not provider_has_cache:
+            skip_retrieval = True
 
+        # Discovery Layer (Hybrid Search)
+        retrieval_anchors = []
+        anchor_terms = []
+        snake_case_ids = []
+        
         search_query = user_input
         if ENABLE_HYBRID_SEARCH and intent == "FOLLOW-UP":
             try:
@@ -464,35 +418,30 @@ class ContextCacheChain:
                     # Strip common LLM preamble that pollutes BM25 search
                     for prefix in ("Sure,", "Here's", "The rewritten query is:", "Rewritten query:"):
                         if raw.lower().startswith(prefix.lower()):
-                            raw = raw[len(prefix):].strip().strip('"').strip("'")
-                    # If rewriter returned something way longer than the input
-                    # it's probably an explanation, not a query — fall back.
-                    if len(raw) > len(user_input) * 3:
-                        return user_input
+                            raw = raw[len(prefix):].strip()
                     return raw
 
-                future = _rewrite_executor.submit(_do_rewrite)
-                search_query = future.result(timeout=2.0)
+                search_query = _rewrite_executor.submit(_do_rewrite).result(timeout=2.2)
+                logger.info(f"🔄 Query Rewritten: '{user_input}' -> '{search_query}'")
             except Exception as e:
-                logger.warning(f"Ollama rewrite failed or timed out: {e}")
+                logger.warning(f"Query rewrite failed or timed out: {e}")
                 search_query = user_input
 
-        # ── Fix C1: Anchor Term Injection ──────────────────────────────
-        # Extract code identifiers from the user query.
-        # all_identifiers: any word with underscore or ALL_CAPS (code-like tokens)
-        # anchor_terms: strictly ALL_CAPS constants (ENABLE_PROMPT_CACHING, etc.)
-        #   — used for propagation detection and targeted retrieval
-        # This prevents "how does" from triggering propagation on every query.
-        all_identifiers = list(set(re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]{3,}\b", user_input)))
-        anchor_terms = [t for t in all_identifiers if t.isupper() and len(t) > 3]
-        # Also include snake_case identifiers (contain underscore) for retrieval
-        snake_case_ids = [t for t in all_identifiers if "_" in t and not t.isupper()]
-        # Combined anchors for retrieval (ALL_CAPS + snake_case)
-        retrieval_anchors = anchor_terms + snake_case_ids
+        # Analysis Layer: Extract technical anchors for deep propagation fixes
+        # Look for CamelCase or snake_case or CAPS_ID or paths/extensions
+        retrieval_anchors = re.findall(r'([a-zA-Z0-9_/.]+\.[a-z]{1,4}|[A-Z][a-z]+[A-Z][a-z]+|[a-z]+_[a-z_]+|[A-Z]{3,}_[A-Z0-9_]+)', user_input)
+        
+        # Also extract individual terms for cross-referencing
+        anchor_terms = re.findall(r'\b[a-zA-Z_][a-zA-Z0-9_]{3,}\b', user_input)
+        snake_case_ids = [t for t in anchor_terms if "_" in t]
 
-        # Inject ALL_CAPS into search query so BM25 can find definition sites
-        if anchor_terms:
-            for term in anchor_terms:
+        # ── Fix B: Deep-link context propagation ──────────────────────
+        # If we detect a specific file or symbol, we should also retrieve
+        # its dependents or siblings in the next tick.
+        if retrieval_anchors:
+            for anchor in retrieval_anchors:
+                # Add to BM25 query to boost definition sites
+                term = f'"{anchor}"'
                 if term not in search_query:
                     search_query = f"{search_query} {term}"
 
@@ -598,26 +547,18 @@ class ContextCacheChain:
                                 k=6,
                                 exclude_file=pinned_file,
                                 filter_extensions=ext_filter,
-                                query_embedding=None,
                             )
-                            new_retrievals.extend(extra)
+                            if extra:
+                                logger.info(f"📍 Fix B: Injected {len(extra)} propagation chunks for '{anchor}'")
+                                new_retrievals.extend(extra)
                         except Exception as e:
-                            logger.warning(f"Sub-query retrieval failed for '{sub_q}': {e}")
+                            logger.warning(f"Fix B hybrid search failed: {e}")
 
-                # Deduplicate the merged pool before reranking.
-                seen_hashes_pre = set()
-                deduped = []
-                for d in new_retrievals:
-                    h = d.metadata.get("content_hash") or d.page_content[:200]
-                    if h not in seen_hashes_pre:
-                        deduped.append(d)
-                        seen_hashes_pre.add(h)
-                new_retrievals = deduped
-        elif skip_retrieval:
+        if skip_retrieval and not provider_has_cache:
             # Semantic cache hit — reuse previous docs as the fresh set.
             new_retrievals = list(previous_union)
 
-        # Save pre-rerank pool for Fix H post-self.reranker injection
+        # Save pre-rerank pool for Fix H post-reranker injection
         pre_rerank_pool = list(new_retrievals) if is_propagation_query else []
 
         # 3. Local Re-ranking (Phase 3) ──────────────────────────────
@@ -637,25 +578,14 @@ class ContextCacheChain:
         # Force-include definition-site chunks the cross-encoder culled.
         # This ensures config constants and bridge functions survive reranking.
         if is_propagation_query and retrieval_anchors and pre_rerank_pool:
-            reranked_hashes = {
-                d.metadata.get("content_hash", d.page_content[:200])
-                for d in new_retrievals
-            }
+            reranked_hashes = {d.metadata.get("content_hash", "") for d in new_retrievals}
+            injected = 0
             for anchor in retrieval_anchors[:3]:
-                injected = 0
                 for d in pre_rerank_pool:
-                    if injected >= 2:
-                        break
-                    h = d.metadata.get("content_hash", d.page_content[:200])
-                    if h in reranked_hashes:
-                        continue
-                    # Match definition sites (CONST = ...) or direct references
-                    if f"{anchor}" in d.page_content:
-                        ref_consts = d.metadata.get("references_constants", "")
-                        is_zero = d.metadata.get("zero_chunk", False)
-                        # Inject if: it's the definition file (zero-chunk with the constant)
-                        # or it references the constant in its metadata
-                        if is_zero or anchor in ref_consts:
+                    h = d.metadata.get("content_hash", "")
+                    if h not in reranked_hashes:
+                        # Simple substring match in chunk to confirm anchor presence
+                        if anchor in d.page_content:
                             new_retrievals.append(d)
                             reranked_hashes.add(h)
                             injected += 1
@@ -668,68 +598,30 @@ class ContextCacheChain:
             seen_hashes = set()
             unique_new = []
             for d in new_retrievals:
-                h = d.metadata.get("content_hash", d.page_content)
+                h = d.metadata.get("content_hash", "")
                 if h not in seen_hashes:
                     unique_new.append(d)
                     seen_hashes.add(h)
-
-            # Cap the new retrievals at MAX_CONTEXT_UNION
-            unique_new = unique_new[:MAX_CONTEXT_UNION]
             
-            # Rebuild seen_hashes based on the sliced unique_new to avoid dropping valid old docs
-            seen_hashes = {d.metadata.get("content_hash", d.page_content) for d in unique_new}
+            # Context Decay: Reduce priority of older context over turns.
+            # We keep a union of current and previous context, but capped.
+            prev_docs = [d for d in previous_union if d.metadata.get("content_hash", "") not in seen_hashes]
             
-            # Calculate how many slots are left for the older stable docs
-            available_old_slots = MAX_CONTEXT_UNION - len(unique_new)
-
-            # Eviction: keep old docs in the SAME ORDER they had in
-            # previous_union so the established context block is
-            # byte-stable across turns — critical for the provider
-            # prefix cache (Anthropic / Gemini / DeepSeek).
-            #
-            # Earlier versions scored old docs by current-query keyword
-            # overlap and re-sorted.  That changed membership AND order
-            # whenever the user rephrased, destroying the cached prefix
-            # on almost every turn.  Freshness priority is already
-            # preserved by `unique_new` taking the first N slots; the
-            # old docs just fill the tail in their original order.
-            surviving_old = []
-            for d in previous_union:
-                if len(surviving_old) >= available_old_slots:
-                    break
-                h = d.metadata.get("content_hash", d.page_content)
-                if h in seen_hashes:
-                    continue  # already in unique_new
-                surviving_old.append(d)
-                seen_hashes.add(h)
-
-            final_docs = surviving_old + unique_new
-            protected_count = len(unique_new)
+            # Sort previous docs by their internal metadata if available (turn_retrieved)
+            # or just take the most recent ones.
+            final_docs = unique_new + prev_docs[:MAX_CONTEXT_UNION - len(unique_new)]
         else:
             final_docs = new_retrievals[:MAX_CONTEXT_UNION]
-            protected_count = 0
 
-        # Filter massive zero-chunks from retrieval results for all models.
-        # Zero-chunks can be up to ZERO_CHUNK_THRESHOLD (100k chars / ~33k tokens) and destroy
-        # signal-to-noise when surfaced via retrieval.  The pinned-file mechanism handles
-        # deliberate full-file viewing; retrieved zero-chunks are almost never the right behaviour.
-        final_docs = [
-            d for d in final_docs
-            if not (d.metadata.get("zero_chunk") and len(d.page_content) > MAX_ZERO_CHUNK_CHARS)
-        ]
-
-        # ── Context window budget enforcement ──────────────────────────
-        # Estimate total prompt tokens and drop trailing RAG chunks until
-        # we fit.  This prevents silent API failures on models with small
-        # context windows (8K Ollama, 32K free-tier).
-        # Specific patterns MUST appear before generic ones — the first
-        # match wins, so "qwen2.5:3b" must precede "qwen", etc.
+        # 🚀 Final Filter: Context Window Budgeting
+        # Scale budget based on model family
         _CONTEXT_BUDGETS = {
-            "qwen2.5:3b": 6000, "llama3.2:1b": 4000,
-            "ollama": 6000, "llama": 6000,
-            "gemma": 28000, "gemini": 28000, "claude": 180000,
-            "gpt-oss": 28000, "gpt": 120000,
-            "deepseek": 60000, "qwen": 28000,
+            "claude-3-5": 160000,
+            "claude-3": 120000,
+            "gpt-4": 80000,
+            "gemini": 250000,
+            "deepseek": 40000,
+            "qwen": 24000,
         }
         _budget = 28000  # default
         for _pattern, _limit in _CONTEXT_BUDGETS.items():
@@ -737,14 +629,13 @@ class ContextCacheChain:
                 _budget = _limit
                 break
         # Estimate: system prompt + pinned + history + RAG + user query
-        _sys_est = len(CORE_INSTRUCTIONS) // 3
-        _pinned_est = _content_len(inputs.get("full_source_context", "")) // 3
-        _hist_est = _est_tokens(history)
-        _query_est = len(user_input) // 3
-        _overhead = _sys_est + _pinned_est + _hist_est + _query_est + 500  # safety margin
-        _rag_budget = _budget - _overhead
-        # Drop chunks from the end (lowest relevance) until within budget.
-        # Account for _format_docs overhead (~80 chars per chunk for
+        # RAG portion shouldn't exceed ~40% of total budget to leave room for history
+        _rag_budget = int(_budget * 0.4)
+        
+        # Token density check: if total chars / 3 > budget, trim.
+        # We trim from the END (oldest or least relevant after re-ranking).
+        
+        # Format overhead estimate (roughly 80 chars per chunk for 
         # "SOURCE: ...\nCONTENT: " prefix).
         _FMT_OVERHEAD_PER_CHUNK = 80
         
@@ -752,12 +643,10 @@ class ContextCacheChain:
         total_rag_chars = sum(len(d.page_content) + _FMT_OVERHEAD_PER_CHUNK for d in final_docs)
         
         while final_docs and (total_rag_chars // 3) > _rag_budget:
-            # Pop from the tail end of surviving_old first, otherwise pop from unique_new
-            if len(final_docs) > protected_count:
-                idx = len(final_docs) - protected_count - 1
-            else:
-                idx = -1
-                
+            # Drop the doc with the lowest relevance if re-ranked, or just the last one
+            # If follow-up, unique_new are at the front, prev_docs at the back.
+            # We pop from the back.
+            idx = -1
             removed_doc = final_docs.pop(idx)
             total_rag_chars -= (len(removed_doc.page_content) + _FMT_OVERHEAD_PER_CHUNK)
 
@@ -776,18 +665,18 @@ class ContextCacheChain:
                 "model_name", "",
             )
             if specialist_model != current_m:
-                if specialist_model not in self._specialist_self.llm_cache:
-                    self._specialist_self.llm_cache[specialist_model] = get_llm(
+                if specialist_model not in self._specialist_llm_cache:
+                    self._specialist_llm_cache[specialist_model] = get_llm(
                         model=specialist_model, streaming=True
                     )
-                active_chain = self.prompt | self._specialist_self.llm_cache[specialist_model]
+                active_chain = self.prompt | self._specialist_llm_cache[specialist_model]
 
         # Dynamic output token budget — reduce for simple queries to free provider quota
         output_tokens = _get_max_tokens(specialty, user_input)
         if output_tokens != MAX_TOKENS:
             base_llm = (
-                self._specialist_self.llm_cache[specialist_model]
-                if (enable_auto and specialist_model and specialist_model in self._specialist_self.llm_cache)
+                self._specialist_llm_cache[specialist_model]
+                if (enable_auto and specialist_model and specialist_model in self._specialist_llm_cache)
                 else self.llm
             )
             # ChatOllama uses 'num_predict' for output token budget; OpenAI/OpenRouter use 'max_tokens'.
@@ -799,9 +688,9 @@ class ContextCacheChain:
         
         # Ensure we always have an embedding to pass back for next turn.
         if current_emb is None:
-            if is_semantic_hit and last_query_emb:
-                current_emb = last_query_emb
-            else:
+            try:
+                current_emb = sem_cache.embedding_model.embed_query(user_input)
+            except Exception:
                 from backend import get_embedding_model
                 current_emb = get_embedding_model().embed_query(user_input)
 
@@ -812,9 +701,9 @@ class ContextCacheChain:
         yield {
             "context": inputs["context"], 
             "intent": intent, 
+            "specialty": specialty, 
+            "reranker_score": reranker_score,
             "query_embedding": current_emb,
-            "specialist_active": specialist_model if enable_auto else None,
-            "top_relevance_score": reranker_score,
             "sentinel_future": background_future # Pass future to UI for persistence
         }
         

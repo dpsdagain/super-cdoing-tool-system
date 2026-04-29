@@ -6,10 +6,13 @@ import os
 import logging
 from typing import List, Optional
 from pydantic import BaseModel, Field
-from tool_registry import validate_path
 from config import WORKSPACE_ROOT, RETRIEVER_K, RERANK_TOP_K, USE_RERANKER
 
 logger = logging.getLogger(__name__)
+
+def _validate_path(path: str) -> str:
+    from tool_registry import validate_path
+    return validate_path(path)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -102,7 +105,7 @@ def grep_tool(pattern: str, include_pattern: Optional[str]=None, exclude_pattern
 def multi_file_edit(file_path: str, replacements: List[Replacement]) -> str:
     """Apply multiple surgical replacements to a single file in one go."""
     try:
-        file_path = validate_path(file_path)
+        file_path = _validate_path(file_path)
     except PermissionError as e:
         return str(e)
     if not os.path.exists(file_path):
@@ -150,7 +153,7 @@ def code_search(query: str, collection_name: str='default', k: int=RETRIEVER_K) 
 def file_read(file_path: str, start_line: Optional[int]=None, end_line: Optional[int]=None) -> str:
     """Read a file's content, optionally within a line range."""
     try:
-        file_path = validate_path(file_path)
+        file_path = _validate_path(file_path)
     except PermissionError as e:
         return str(e)
     if not os.path.exists(file_path):
@@ -173,7 +176,7 @@ def file_edit(file_path: str, old_string: str, new_string: str) -> str:
     """Surgically replace old_string with new_string in a file (F-05 Parity)."""
     from edit_utils import FuzzyMatcher
     try:
-        file_path = validate_path(file_path)
+        file_path = _validate_path(file_path)
     except PermissionError as e:
         return str(e)
     if not os.path.exists(file_path):
@@ -197,7 +200,7 @@ def file_edit(file_path: str, old_string: str, new_string: str) -> str:
 def file_write(file_path: str, content: str) -> str:
     """Create or overwrite a file with the provided content."""
     try:
-        file_path = validate_path(file_path)
+        file_path = _validate_path(file_path)
     except PermissionError as e:
         return str(e)
     try:
@@ -217,7 +220,7 @@ def glob_tool(pattern: str) -> str:
         safe_matches = []
         for m in matches:
             try:
-                safe_matches.append(validate_path(m))
+                safe_matches.append(_validate_path(m))
             except PermissionError:
                 continue
         if not safe_matches:
@@ -229,7 +232,7 @@ def glob_tool(pattern: str) -> str:
 def brief_tool(file_path: str) -> str:
     """Provide a brief outline of a file to save context."""
     try:
-        file_path = validate_path(file_path)
+        file_path = _validate_path(file_path)
     except PermissionError as e:
         return str(e)
     if not os.path.exists(file_path):

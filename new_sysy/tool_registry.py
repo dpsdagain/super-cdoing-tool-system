@@ -12,35 +12,6 @@ from config import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  Explicit Imports (replacing wildcard imports)
-# ═══════════════════════════════════════════════════════════════════════════
-from file_tools import (
-    code_search, file_read, file_edit, file_write, multi_file_edit,
-    grep_tool, glob_tool, brief_tool, symbol_search,
-    CodeSearchInput, FileReadInput, FileEditInput, FileWriteInput,
-    MultiFileEditInput, GrepInput, GlobInput, BriefInput, SymbolSearchInput,
-    UndoInput,
-)
-from bash_tool import bash_tool, BashInput
-from web_tools import (
-    web_search, web_fetch, read_url,
-    WebSearchInput, WebFetchInput,
-)
-from git_tools import (
-    git_status, git_diff, git_commit, git_root, git_log,
-    GitStatusInput, GitDiffInput, GitCommitInput, GitLogInput,
-)
-from misc_tools import (
-    switch_model, update_plan, set_status, cost_report, system_doctor,
-    notebook_edit, undo_last_edit, linter_tool, memory_tool,
-    arch_visualizer, undercover_mode, task_budget, ask_user,
-    SwitchModelInput, UpdatePlanInput, SetStatusInput, NotebookEditInput,
-    AskUserInput, ArchVisualizerInput, TaskBudgetInput,
-    LinterInput, MemoryInput, UndercoverInput, CostInput, DoctorInput,
-)
-from agent_tools import agent_delegate, AgentDelegateInput
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Core Infrastructure
@@ -107,6 +78,37 @@ def validate_path(path: str) -> str:
             raise e
         raise PermissionError(f"Access Denied: Could not validate path '{path}'.")
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Explicit Imports (Moved after infrastructure to break circularities)
+# ═══════════════════════════════════════════════════════════════════════════
+from file_tools import (
+    code_search, file_read, file_edit, file_write, multi_file_edit,
+    grep_tool, glob_tool, brief_tool, symbol_search,
+    CodeSearchInput, FileReadInput, FileEditInput, FileWriteInput,
+    MultiFileEditInput, GrepInput, GlobInput, BriefInput, SymbolSearchInput,
+    UndoInput,
+)
+from bash_tool import bash_tool, BashInput
+from web_tools import (
+    web_search, web_fetch, read_url,
+    WebSearchInput, WebFetchInput,
+)
+from git_tools import (
+    git_status, git_diff, git_commit, git_root, git_log,
+    GitStatusInput, GitDiffInput, GitCommitInput, GitLogInput,
+)
+from misc_tools import (
+    switch_model, update_plan, set_status, cost_report, system_doctor,
+    notebook_edit, undo_last_edit, linter_tool, memory_tool,
+    arch_visualizer, undercover_mode, task_budget, ask_user,
+    SwitchModelInput, UpdatePlanInput, SetStatusInput, NotebookEditInput,
+    AskUserInput, ArchVisualizerInput, TaskBudgetInput,
+    LinterInput, MemoryInput, UndercoverInput, CostInput, DoctorInput,
+)
+from agent_tools import agent_delegate, AgentDelegateInput
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  Tool Registry
 # ═══════════════════════════════════════════════════════════════════════════
@@ -165,128 +167,92 @@ _UNSORTED_TOOLS = {
         name="glob",
         func=glob_tool,
         input_schema=GlobInput,
-        description="Search for files using glob patterns (e.g., '**/*.py').",
+        description="Search for files using glob patterns. Returns a list of relative paths.",
         is_read_only=True
-    ),
-    "brief": build_tool(
-        name="brief",
-        func=brief_tool,
-        input_schema=BriefInput,
-        description="Provide a brief outline (classes and functions) of a file to save context.",
-        is_read_only=True
-    ),
-    "linter": build_tool(
-        name="linter",
-        func=linter_tool,
-        input_schema=LinterInput,
-        description="Run a linter on a specific file to check for syntax errors or formatting issues.",
-        is_read_only=True
-    ),
-    "memory": build_tool(
-        name="memory",
-        func=memory_tool,
-        input_schema=MemoryInput,
-        description="Save a learned fact, architecture decision, or user preference into long-term memory (MEMORY.md).",
-        is_read_only=False
-    ),
-    "ask_user": build_tool(
-        name="ask_user",
-        func=ask_user,
-        input_schema=AskUserInput,
-        description="Pause agent execution to ask the human user a clarifying question.",
-        is_read_only=True,
-        is_concurrency_safe=True
-    ),
-    "web_search": build_tool(
-        name="web_search",
-        func=web_search,
-        input_schema=WebSearchInput,
-        description="Search the internet for documentation, libraries, or coding solutions.",
-        is_read_only=True
-    ),
-    "web_fetch": build_tool(
-        name="web_fetch",
-        func=web_fetch,
-        input_schema=WebFetchInput,
-        description="Fetch and read the text content of a specific URL.",
-        is_read_only=True
-    ),
-    "symbol_search": build_tool(
-        name="symbol_search",
-        func=symbol_search,
-        input_schema=SymbolSearchInput,
-        description="Find the definition of a class or function across the codebase.",
-        is_read_only=True
-    ),
-    "agent_delegate": build_tool(
-        name="agent_delegate",
-        func=agent_delegate,
-        input_schema=AgentDelegateInput,
-        description="Delegate a specific task to a sub-agent with its own context.",
-        is_read_only=False
-    ),
-    "arch_visualizer": build_tool(
-        name="arch_visualizer",
-        func=arch_visualizer,
-        input_schema=ArchVisualizerInput,
-        description="Generate a high-level architecture overview of classes and methods in Mermaid format.",
-        is_read_only=True
-    ),
-    "undercover_mode": build_tool(
-        name="undercover_mode",
-        func=undercover_mode,
-        input_schema=UndercoverInput,
-        description="Strip AI identifiers and local filesystem paths from a text string.",
-        is_read_only=True
-    ),
-    "task_budget": build_tool(
-        name="task_budget",
-        func=task_budget,
-        input_schema=TaskBudgetInput,
-        description="Set a maximum token limit for the current task to control costs.",
-        is_read_only=False
-    ),
-    "update_plan": build_tool(
-        name="update_plan",
-        func=update_plan,
-        input_schema=UpdatePlanInput,
-        description="Synthetic Tool: Update your internal master plan. Use this to track progress, rejected ideas, and next steps.",
-        is_read_only=False
-    ),
-    "set_status": build_tool(
-        name="set_status",
-        func=set_status,
-        input_schema=SetStatusInput,
-        description="Sets the current activity status for the TUI.",
-        is_read_only=False
     ),
     "git_status": build_tool(
         name="git_status",
         func=git_status,
         input_schema=GitStatusInput,
-        description="Get porcelain git status.",
+        description="Run 'git status' and return the result. Use to check which files are modified or untracked.",
         is_read_only=True
     ),
     "git_diff": build_tool(
         name="git_diff",
         func=git_diff,
         input_schema=GitDiffInput,
-        description="Get git diff for the repo or a file.",
+        description="Run 'git diff' to see changes in tracked files. Supports diffing against a specific commit or staged changes.",
         is_read_only=True
     ),
     "git_commit": build_tool(
         name="git_commit",
         func=git_commit,
         input_schema=GitCommitInput,
-        description="Commit staged changes.",
+        description="Stage changes and create a git commit. Must provide a descriptive commit message.",
         is_read_only=False
     ),
     "git_log": build_tool(
         name="git_log",
         func=git_log,
         input_schema=GitLogInput,
-        description="View recent commit history.",
+        description="View the git commit history. Supports limiting the number of entries.",
         is_read_only=True
+    ),
+    "web_search": build_tool(
+        name="web_search",
+        func=web_search,
+        input_schema=WebSearchInput,
+        description="Perform a Google search to find information outside the codebase.",
+        is_read_only=True
+    ),
+    "web_fetch": build_tool(
+        name="web_fetch",
+        func=web_fetch,
+        input_schema=WebFetchInput,
+        description="Fetch a URL and extract its main content as Markdown. Ideal for reading documentation.",
+        is_read_only=True
+    ),
+    "brief": build_tool(
+        name="brief",
+        func=brief_tool,
+        input_schema=BriefInput,
+        description="Generate a high-level summary of a file's structure (functions, classes, imports).",
+        is_read_only=True
+    ),
+    "symbol_search": build_tool(
+        name="symbol_search",
+        func=symbol_search,
+        input_schema=SymbolSearchInput,
+        description="Search for a specific code symbol (class or function) definition across the codebase.",
+        is_read_only=True
+    ),
+    "agent_delegate": build_tool(
+        name="agent_delegate",
+        func=agent_delegate,
+        input_schema=AgentDelegateInput,
+        description="Spawn a sub-agent to handle a complex sub-task. Returns the agent's final report.",
+        is_read_only=False
+    ),
+    "ask_user": build_tool(
+        name="ask_user",
+        func=ask_user,
+        input_schema=AskUserInput,
+        description="Ask the user a question to clarify requirements or get feedback.",
+        is_read_only=True
+    ),
+    "update_plan": build_tool(
+        name="update_plan",
+        func=update_plan,
+        input_schema=UpdatePlanInput,
+        description="Update the agent's current task plan and strategy.",
+        is_read_only=False
+    ),
+    "set_status": build_tool(
+        name="set_status",
+        func=set_status,
+        input_schema=SetStatusInput,
+        description="Update the agent's current status message (what it is doing right now).",
+        is_read_only=False
     ),
     "switch_model": build_tool(
         name="switch_model",

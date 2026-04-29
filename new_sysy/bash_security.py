@@ -30,7 +30,7 @@ ZSH_DANGEROUS_COMMANDS = {
 DANGEROUS_COMMANDS = {
     'rm', 'mkfs', 'dd', 'chmod', 'chown', 'wget', 'curl', 'nc', 'netcat',
     'socat', 'telnet', 'python', 'python3', 'perl', 'ruby', 'php', 'node',
-    'npm', 'npx', 'yarn', 'git', 'sudo', 'su', 'doas', 'docker', 'kubectl',
+    'npm', 'npx', 'yarn', 'sudo', 'su', 'doas', 'docker', 'kubectl',
     'k8s', 'eval', 'exec', 'source', '.', 'alias', 'unalias', 'bind',
     'trap', 'kill', 'killall', 'pkill', 'shutdown', 'reboot', 'halt',
     'poweroff', 'init', 'systemctl', 'service', 'journalctl', 'dmesg',

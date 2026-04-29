@@ -37,20 +37,8 @@ class PermissionManager:
         and doesn't target sensitive files or directories.
         """
         try:
-            abs_root = WORKSPACE_ROOT.resolve()
-            abs_target = Path(target_path).resolve()
-
-            # 1. Boundary Check: Must be inside WORKSPACE_ROOT
-            is_inside = abs_root == abs_target or abs_root in abs_target.parents
-            if not is_inside:
-                return False
-
-            # 2. Path Component Check: No part of the path can be in forbidden_patterns
-            # This blocks .ssh/config even if 'config' isn't forbidden.
-            path_parts = abs_target.parts
-            if any(p in self.forbidden_patterns for p in path_parts):
-                return False
-
+            from tool_registry import validate_path
+            validate_path(target_path)
             return True
         except Exception:
             return False
