@@ -1,3 +1,7 @@
+"""
+coordinator.py — Coordinator and worker orchestration for delegated sub-tasks.
+"""
+
 import os
 import logging
 from typing import List, Any
