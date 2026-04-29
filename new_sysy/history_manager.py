@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 class HistoryManager:
     """
-    Anthropic-Grade File History & Checkout System (F-28).
+    Advanced File History & Checkout System.
     Ported from utils/fileHistory.ts.
     
     Maintains a versioned backup of files modified during the session.

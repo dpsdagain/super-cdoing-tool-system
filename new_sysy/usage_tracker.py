@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 # 💳 Current Model Price Map (Price per 1M tokens)
-# Ported from Anthropic constants
+# Ported from standard constants
 MODEL_PRICES = {
     "claude-3-5-sonnet-20241022": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_write": 3.75},
     "claude-3-5-haiku-20241022": {"input": 0.25, "output": 1.25, "cache_read": 0.03, "cache_write": 0.30},
@@ -13,7 +13,7 @@ MODEL_PRICES = {
 
 class UsageTracker:
     """
-    Anthropic-Grade Token & Cost Auditor (F-18).
+    Advanced Token & Cost Auditor.
     Maintains a high-precision session ledger.
     """
     
@@ -38,7 +38,7 @@ class UsageTracker:
         c_read = usage.get("cache_read_input_tokens", 0)
         c_write = usage.get("cache_creation_input_tokens", 0)
         
-        # 🧾 Calculate Cost in USD
+        # Calculate Cost in USD
         cost = (
             (in_t * prices["input"]) + 
             (out_t * prices["output"]) + 

@@ -60,7 +60,7 @@ class PermissionManager:
         Check if the tool execution is allowed.
         Returns a PermissionDecision with .behavior ('allow', 'ask', 'deny') and .reason.
         """
-        # 🚀 RECURSION GUARD: Prevent sub-agent death spirals
+        # RECURSION GUARD: Prevent sub-agent death spirals
         if tool_name == "agent_delegate":
             if current_depth >= self.max_delegation_depth:
                 logger.warning(f"SECURITY: Blocked agent_delegate at depth {current_depth}")
@@ -99,7 +99,7 @@ class PermissionManager:
         if tool_name == "bash":
             command = tool_args.get("command", "").lower()
             
-            # 🚀 BASH JAIL: Block attempts to escape workspace or use forbidden paths
+            # BASH JAIL: Block attempts to escape workspace or use forbidden paths
             # 1. Block shell chaining operators
             if any(op in command for op in ["&&", ";", "|", "\n", "`", "$("]):
                 return PermissionDecision(behavior="deny", reason="Shell metacharacters detected.") 

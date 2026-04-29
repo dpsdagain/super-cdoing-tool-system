@@ -369,12 +369,12 @@ def ingest_into_chroma(
 
         new_docs = [d for d in documents if d.metadata["content_hash"] not in existing_hashes]
         if not new_docs:
-            logger.info("⚡ Ingestion: All %d chunks are already in the database. 100%% De-duplicated.", len(documents))
+            logger.info("Ingestion: All %d chunks are already in the database. 100%% De-duplicated.", len(documents))
             return existing_db, 0
 
         skipped = len(documents) - len(new_docs)
         if skipped > 0:
-            logger.info("⚡ Ingestion: Adding %d new chunks. (Skipped %d duplicates)", len(new_docs), skipped)
+            logger.info("Ingestion: Adding %d new chunks. (Skipped %d duplicates)", len(new_docs), skipped)
 
         existing_db.add_documents(new_docs)
         # Keep BM25 in sync with ChromaDB — must update here too,
@@ -390,7 +390,7 @@ def ingest_into_chroma(
         collection_name=collection_name,
     )
 
-    # 🚀 Platinum Upgrade: Build Hybrid BM25 Index
+    # Advanced Upgrade: Build Hybrid BM25 Index
     _update_bm25_index(documents, collection_name)
     invalidate_collection_info_cache(collection_name)
 

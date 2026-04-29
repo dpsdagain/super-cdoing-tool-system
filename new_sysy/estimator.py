@@ -3,7 +3,7 @@ from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
-# 📐 Anthropic-Parity Context Limits (utils/context.ts:149)
+# Context Limits (utils/context.ts:149)
 MODEL_LIMITS = {
     "claude-3-5-sonnet-20241022": 200_000,
     "claude-3-5-haiku-20241022": 200_000,
@@ -13,7 +13,7 @@ MODEL_LIMITS = {
 
 class ContextEstimator:
     """
-    Anthropic-Grade Pre-Flight Estimator (F-32).
+    Advanced Pre-Flight Estimator.
     Predicts context overflows before they reach the API.
     """
     
@@ -21,7 +21,7 @@ class ContextEstimator:
     def estimate_content_tokens(content: Any) -> int:
         """
         Estimates the number of tokens in a piece of content (string or list).
-        Heuristic: 1 token approx 3.8 characters (Anthropic-Grade).
+        Heuristic: 1 token approx 3.8 characters.
         """
         if not content:
             return 0

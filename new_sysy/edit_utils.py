@@ -3,14 +3,14 @@ from typing import Optional
 
 class FuzzyMatcher:
     """
-    Anthropic-Grade Fuzzy String Matcher (F-05).
+    Advanced Fuzzy String Matcher.
     Ported from FileEditTool/utils.ts.
     
     Ensures file edits succeed even if the LLM makes minor 
     formatting/typographic errors.
     """
     
-    # 🧬 Anthropic Constants (utils.ts:21-24)
+    # String Matcher Constants (utils.ts:21-24)
     CURLY_QUOTES = {
         '‘': "'", '’': "'",
         '“': '"', '”': '"'

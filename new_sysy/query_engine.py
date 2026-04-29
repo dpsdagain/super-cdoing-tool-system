@@ -151,10 +151,10 @@ class QueryEngine:
         self.permission_mode = permission_mode
         self.delegation_depth = delegation_depth
         
-        # 🐝 Initialize the Multi-Agent Coordinator
+        # Initialize the Multi-Agent Coordinator
         self.coordinator = Coordinator(self)
         
-        # 🌐 Register engine globally for tool access (F-Coordinator)
+        # Register engine globally for tool access (F-Coordinator)
         import tools
         tools.current_engine.instance = self
         self.temperature = temperature
@@ -167,7 +167,7 @@ class QueryEngine:
 
         self.llm = ModelFactory.create_model(self.model_id, temperature=self.temperature)
         
-        # 🚀 Anthropic-Grade Plan/Act Separation
+        # Advanced Plan/Act Separation
         # Use main model for planning if "fast" is failing or user prefers consistency
         self.planner_llm = ModelFactory.create_model(self.model_id, temperature=0.0)
         
@@ -184,7 +184,7 @@ class QueryEngine:
         self.current_plan: str = "No plan defined yet."
         self.current_status: str = "Initializing..."
 
-        # 🚀 Initialize RAG Chain
+        # Initialize RAG Chain
         from rag_chain import build_rag_chain
         self.rag_chain = build_rag_chain(None, model=self.model_id)
 
@@ -278,19 +278,19 @@ class QueryEngine:
             validated_args = tool_info["input_schema"](**args)
             result = tool_info["func"](**validated_args.model_dump())
             
-            # 🚀 Handle Synthetic State Interception
+            # Handle Synthetic State Interception
             if isinstance(result, str):
                 if result.startswith("[PLAN_UPDATED]"):
                     self.current_plan = result.replace("[PLAN_UPDATED] ", "")
                 elif result.startswith("[STATUS_UPDATED]"):
                     self.current_status = result.replace("[STATUS_UPDATED] ", "")
 
-            # 🚀 SYSTEM 2: Result Budget Gate (Archiving)
+            # SYSTEM 2: Result Budget Gate (Archiving)
             offloaded_result = self.context_manager.result_archive.offload_if_large(name, str(result))
 
             return offloaded_result
         except Exception as e:
-            # 🚀 Fix Reliability: Structured error feedback for the agent
+            # Fix Reliability: Structured error feedback for the agent
             import traceback
             error_details = traceback.format_exc() if "DEBUG" in os.environ else str(e)
             return f"[TOOL_FAILURE] Tool '{name}' failed with error: {str(e)}. Please analyze the error and correct your arguments or approach."
@@ -322,7 +322,7 @@ USER REQUEST: {messages[1].content if len(messages) > 1 else 'None'}
 
 Based on this status, determine the next action."""
             
-            # 🚀 Use the specialized Planner Model for strategy overrides
+            # Use the specialized Planner Model for strategy overrides
             response = self.planner_llm.invoke([
                 SystemMessage(content=PLANNER_PROMPT), 
                 HumanMessage(content=prompt)
@@ -368,7 +368,7 @@ Based on this status, determine the next action."""
 
     def process_query_stream(self, query: str, session_id: str = "default", messages: Optional[List[Any]] = None, max_turns: int = 15):
         """
-        Anthropic-Grade Agentic Loop (F-01).
+        Advanced Agentic Loop (F-01).
         Ported from queryLoop in query.ts.
         """
         if messages is None or len(messages) == 0:
@@ -388,7 +388,7 @@ Based on this status, determine the next action."""
                 state.is_terminal = True
                 break
 
-            # 🛠️ G-1: Grooming Phase (The Anthropic Secret)
+            # G-1: Grooming Phase
             state.messages = self._apply_pre_query_grooming(state.messages, self.current_plan)
             
             # 🪦 T-1: Tombstone Recovery (query.ts:182)
@@ -439,14 +439,25 @@ Based on this status, determine the next action."""
                 yield {"type": "status", "content": f"Blocked: {perm_decision.reason}"}
                 result = f"Error: Permission denied. {perm_decision.reason}"
             elif perm_decision.behavior == "ask":
-                yield {"type": "permission_request", "tool": tool_name, "args": tool_args}
-                return
-            else:
+                if self.permission_callback:
+                    is_allowed = self.permission_callback(tool_name, tool_args)
+                    if not is_allowed:
+                        yield {"type": "status", "content": "Blocked by User"}
+                        result = "Error: Permission denied by user."
+                        perm_decision.behavior = "deny"
+                    else:
+                        perm_decision.behavior = "allow"
+                else:
+                    yield {"type": "status", "content": "Blocked: Permission callback missing."}
+                    result = "Error: Permission denied (no callback provided)."
+                    perm_decision.behavior = "deny"
+
+            if perm_decision.behavior == "allow":
                 # ⏪ F-28: Automatic Pre-Edit Checkpointing
                 if tool_name in ["file_write", "file_edit", "multi_file_edit"]:
                     self.history_manager.track_edit(tool_args.get("file_path", ""), tool_id)
                 
-                # 🚀 HOOK: Pre-Tool Execution
+                # HOOK: Pre-Tool Execution
                 for hook in self.hooks:
                     modified_args = hook.on_tool_call(tool_name, tool_args)
                     if modified_args is not None:
@@ -455,7 +466,7 @@ Based on this status, determine the next action."""
                 yield {"type": "status", "content": f"Action: Running {tool_name}..."}
                 result = self.execute_tool(tool_name, tool_args, tool_id=tool_id)
             
-            # 🚀 HOOK: Post-Tool Result
+            # HOOK: Post-Tool Result
             for hook in self.hooks:
                 modified_result = hook.on_tool_result(tool_name, result)
                 if modified_result is not None:
@@ -543,7 +554,7 @@ Based on this status, determine the next action."""
                     logger.error(f"Execution failed: {e}")
                     raise e # Re-raise for tombstone handler
 
-            # 🚀 ENFORCED TOOL ACTION (ACTIVE NUDGE)
+            # ENFORCED TOOL ACTION (ACTIVE NUDGE)
             # If the planner decided tool, but no tools were called, or we want to push for a nudge
             if action == "tool" and not state.is_terminal:
                 yield {"type": "status", "content": f"Action: {planner_decision.get('reason', 'Executing Tool...')}"}
@@ -585,7 +596,7 @@ Based on this status, determine the next action."""
                 
                 pass # Logic continues naturally
 
-        # 🚀 HIGH-FIDELITY FINAL ACTION
+        # HIGH-FIDELITY FINAL ACTION
         if action == "final":
             final_prompt = """You are finishing the task. Based on all previous reasoning, tool results, and context:
 1. Provide a clear and definitive final answer.
@@ -595,7 +606,7 @@ Based on this status, determine the next action."""
             
             response = self.llm.invoke(messages + [SystemMessage(content=final_prompt)])
             
-            # 🚀 HOOK: Turn End
+            # HOOK: Turn End
             for hook in self.hooks:
                 hook.on_turn_end(response.content)
 

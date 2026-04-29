@@ -87,21 +87,25 @@ class EngineContext(threading.local):
 current_engine = EngineContext()
 
 
+FORBIDDEN_PATTERNS = [".env", ".git", "id_rsa", "id_ed25519", "credentials", ".ssh", ".aws", ".config"]
+
 def validate_path(path: str) -> str:
-    """Ensure the path is within the WORKSPACE_ROOT boundary using OS-level checks."""
+    """Ensure the path is within the WORKSPACE_ROOT boundary and doesn't target sensitive files."""
     try:
         target = Path(path).resolve()
         root = Path(WORKSPACE_ROOT).resolve()
-        
+
         if not target.is_relative_to(root):
             raise PermissionError(f"Access Denied: Path '{target}' is outside the allowed workspace '{root}'.")
-            
+
+        if any(p in FORBIDDEN_PATTERNS for p in target.parts):
+            raise PermissionError(f"Access Denied: Path '{target}' contains forbidden components.")
+
         return str(target)
     except Exception as e:
         if isinstance(e, PermissionError):
             raise e
         raise PermissionError(f"Access Denied: Could not validate path '{path}'.")
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Tool Registry

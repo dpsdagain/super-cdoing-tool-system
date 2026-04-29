@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 class SystemDoctor:
     """
-    Anthropic-Grade Diagnostic Engine (F-44).
+    Advanced Diagnostic Engine.
     Ported from utils/doctorDiagnostic.ts.
     
     Audits the environment for binary dependencies, network health, 
@@ -26,7 +26,7 @@ class SystemDoctor:
             "status": "PASS"
         }
         
-        # 🛡️ 1. Binary Dependency Probe
+        # 1. Binary Dependency Probe
         dependencies = ["git", "rg", "python", "npm"]
         for dep in dependencies:
             path = shutil.which(dep)
@@ -37,7 +37,7 @@ class SystemDoctor:
             if not path:
                 results["status"] = "WARNING"
 
-        # 🚀 2. PATH & Windows OS Check (doctorDiagnostic.ts:374)
+        # 2. PATH & Windows OS Check (doctorDiagnostic.ts:374)
         path_var = os.environ.get("PATH", "")
         results["environment"] = {
             "os": os.name,
@@ -46,7 +46,7 @@ class SystemDoctor:
             "temp_dir": os.environ.get("TEMP", "C:\\Temp")
         }
 
-        # 🌊 3. Network Latency Probe
+        # 3. Network Latency Probe
         # Simple probe to identify connection bottlenecks
         try:
             start = time.time()
@@ -58,7 +58,7 @@ class SystemDoctor:
             results["network"]["latency_ms"] = "TIMEOUT"
             results["status"] = "WARNING"
 
-        # ☣️ 4. Toxic Workspace Pattern Detector
+        # 4. Toxic Workspace Pattern Detector
         # Scans for huge files that might accidentally bloat context
         root = os.getcwd()
         for f in os.listdir(root):

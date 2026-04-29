@@ -7,7 +7,7 @@ from typing import List, Dict, Optional, Tuple
 
 class GitManager:
     """
-    Anthropic-Grade Git Integration (F-34).
+    Advanced Git Integration.
     Ported from utils/git.ts.
     
     Handles Worktrees, Canonical Root Discovery, and Remote Normalization.

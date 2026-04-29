@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 class ContextManager:
     """
-    Anthropic-Grade 5-Layer Context Fortress (F-23).
+    Advanced 5-Layer Context Architecture.
     Tiered reduction preserves technical precision while bounding token cost.
     """
     def __init__(self, max_context_tokens: int = 128000, compression_threshold: float = 0.9, summarizer_llm: Optional[Any] = None):

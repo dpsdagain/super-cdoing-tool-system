@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 class ContextRules:
     """
-    Anthropic-Grade Context Discovery Engine (F-16).
+    Advanced Context Discovery Engine.
     Ported logic from utils/claudemd.ts.
     
     Implements hierarchical discovery of CLAUDE.md, .claude/rules/*.md,
@@ -56,13 +56,13 @@ class ContextRules:
         all_rules: List[str] = []
         processed_paths: Set[Path] = set()
 
-        # 🚀 1. Load User Global Rules (~/.claude/CLAUDE.md)
+        # 1. Load User Global Rules (~/.claude/CLAUDE.md)
         global_rule = self.user_home / ".claude" / "CLAUDE.md"
         if global_rule.exists():
             all_rules.append(f"### GLOBAL RULES (~/.claude)\n{self._read_and_strip(global_rule)}")
             processed_paths.add(global_rule)
 
-        # 🚀 2. Hierarchical Discovery (Parent -> Child)
+        # 2. Hierarchical Discovery (Parent -> Child)
         # We traverse up to the workspace root, then reverse to maintain priority
         traversal = []
         temp_curr = curr

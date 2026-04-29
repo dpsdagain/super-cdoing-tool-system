@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 class NotebookMutator:
     """
-    Anthropic-Grade Jupyter Mutator (F-12).
+    Advanced Jupyter Mutator.
     Surgically edits .ipynb cells without corrupting JSON.
     """
     
@@ -22,7 +22,7 @@ class NotebookMutator:
             cells: List[Dict[str, Any]] = nb.get("cells", [])
             target_idx = -1
 
-            # 🧬 Cell Discovery (mirrors NotebookEditTool.ts:354)
+            # Cell Discovery (mirrors NotebookEditTool.ts:354)
             # Try UUID first, then fall back to virtual index (cell-0 style)
             for i, cell in enumerate(cells):
                 if cell.get("id") == cell_id:
@@ -38,7 +38,7 @@ class NotebookMutator:
             if edit_mode != "insert" and (target_idx < 0 or target_idx >= len(cells)):
                 return f"Error: Cell ID '{cell_id}' not found."
 
-            # 🛠️ Mutation Logic (NotebookEditTool.ts:392-428)
+            # Mutation Logic (NotebookEditTool.ts:392-428)
             if edit_mode == "delete":
                 cells.pop(target_idx)
             elif edit_mode == "insert":
@@ -57,12 +57,12 @@ class NotebookMutator:
                 target = cells[target_idx]
                 target["source"] = new_source.splitlines(keepends=True)
                 if target["cell_type"] == "code":
-                    # 🧹 Sanitize stales (NotebookEditTool.ts:422)
+                    # Sanitize stales (NotebookEditTool.ts:422)
                     target["execution_count"] = None
                     target["outputs"] = []
 
             with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(nb, f, indent=1) # Anthropic Indent (Line 431)
+                json.dump(nb, f, indent=1) # Consistent Indent (Line 431)
 
             return f"Successfully {edit_mode}ed cell in {file_path}."
         except Exception as e:

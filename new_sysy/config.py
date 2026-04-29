@@ -83,7 +83,7 @@ SESSION_DIR = str(APP_HOME / "sessions")
 TEMP_OUTPUT_DIR = str(APP_HOME / "temp_outputs")
 
 
-# 🚀 The Workspace Boundary: Current directory where the agent was started
+# The Workspace Boundary: Current directory where the agent was started
 WORKSPACE_ROOT = Path(os.getcwd()).resolve()
 
 # Ensure global directories exist

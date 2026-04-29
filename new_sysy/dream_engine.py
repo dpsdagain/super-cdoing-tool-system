@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 class DreamEngine:
     """
-    Anthropic-Grade Reflection & Memory Engine (F-50).
+    Advanced Reflection & Memory Engine.
     Processes session transcripts to extract 'Golden Rules' for the project.
     """
     
@@ -45,7 +45,7 @@ class DreamEngine:
         if not lessons:
             return "No new patterns discovered this turn."
 
-        # 📦 Persist to Memory Vault
+        # Persist to Memory Vault
         with open(self.memory_file, "a", encoding="utf-8") as f:
             f.write(f"\n### Reflection ({engine_model})\n")
             f.write("\n".join(lessons) + "\n")

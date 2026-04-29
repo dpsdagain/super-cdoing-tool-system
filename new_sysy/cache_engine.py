@@ -76,7 +76,7 @@ class SemanticCache:
             cached_model = md.get("model_fp")
             if cached_model and cached_model != model_fp:
                 continue
-            logger.info(f"⚡ Semantic Cache Hit (Score: {score:.4f})")
+            logger.info(f"Semantic Cache Hit (Score: {score:.4f})")
             return md.get("answer")
         return None
 

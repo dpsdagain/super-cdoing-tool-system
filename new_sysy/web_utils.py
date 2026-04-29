@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 class WebFetcher:
     """
-    Anthropic-Grade Web Content Extractor (F-10).
+    Advanced Web Content Extractor.
     Surgically extracts documentation and summaries from URLs.
     """
     
@@ -21,7 +21,7 @@ class WebFetcher:
         Fetches a URL and converts it to clean Markdown (WebFetchTool.ts:208).
         """
         try:
-            # 🛡️ 1. Fetch Phase (with browser-like headers)
+            # 1. Fetch Phase (with browser-like headers)
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Antigravity/1.0"
             }
@@ -29,7 +29,7 @@ class WebFetcher:
                 res = client.get(url)
                 res.raise_for_status()
                 
-            # 🧬 2. Transform Phase (trafilatura: strips sidebars/ads)
+            # 2. Transform Phase (trafilatura: strips sidebars/ads)
             if trafilatura:
                 content = trafilatura.extract(res.text, include_links=True, include_formatting=True)
             else:
@@ -41,7 +41,7 @@ class WebFetcher:
             if not content:
                 content = "Could not extract meaningful content from the page."
 
-            # ✂️ 3. Token Density Phase (WebFetchTool.ts:271)
+            # 3. Token Density Phase (WebFetchTool.ts:271)
             # If the user provides a prompt, we should ideally use a fast model.
             # For this standalone POC, we'll return the full distilled content.
             return {

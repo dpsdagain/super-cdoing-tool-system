@@ -64,8 +64,9 @@ def bash_tool(command: str) -> str:
         paths = re.findall(r'((?:[a-zA-Z]:\\|[/\\])[\w\s.-]+(?:[/\\][\w\s.-]+)*)', command)
         for p in paths:
             try:
-                if not validate_path(p):
-                    return f"Error: Command rejected. Detected attempt to access restricted path: {p}"
+                validate_path(p)
+            except PermissionError as e:
+                return f"Error: Command rejected. {str(e)}"
             except Exception:
                 pass  # Not a valid path, ignore
 

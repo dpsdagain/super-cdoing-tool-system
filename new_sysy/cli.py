@@ -1,14 +1,14 @@
 import sys
 import time
 
-# ⏱️ STARTUP PROFILER (Anthropic-Parity: entrypoint.ts:45)
+# STARTUP PROFILER
 _start_time = time.perf_counter()
 
-# ⚡ FAST-PATH DISPATCHER 
+# FAST-PATH DISPATCHER 
 if len(sys.argv) > 1:
     fast_cmd = sys.argv[1]
     if fast_cmd in ["--version", "-v"]:
-        print("🤖 Antigravity Agent v2.4.1 (Anthropic-Parity Core)")
+        print("Antigravity Agent v2.4.1 (Core)")
         sys.exit(0)
     elif fast_cmd == "--help":
         print("Usage: antigravity [COMMAND] [OPTIONS]\n\nCommands:\n  doctor   Audit system health\n  cost     View session costs\n  clear    Reset session\n\nOptions:\n  --model  Specify LLM model\n  --v      Show version")
@@ -277,30 +277,7 @@ class AgentCLI:
 
                         elif event["type"] == "tombstone":
                             if active_status: active_status.stop()
-                            console.print(f"\n{INDENT}[warning] 🪦 {event['content']} [/]")
-                        
-                        elif event["type"] == "permission_request":
-                            if active_status: active_status.stop()
-                            tool = event["tool"]
-                            args = event["args"]
-                            console.print("\n")
-                            console.print(Align.left(Panel(
-                                f"[bold yellow]🛡️ Permission Required:[/bold yellow] Agent wants to run [bold blue]{tool}[/bold blue] with args:\n[dim]{json.dumps(args, indent=2)}[/dim]",
-                                title="Security Gate", box=ROUNDED, border_style="yellow", width=min(console.width - 4, 100)
-                            )))
-                            
-                            choice = self.prompt_session.prompt(
-                                HTML(f'<b><ansiyellow>{USER_ICON} Allow tool execution? (y/n)</ansiyellow></b> > ')
-                            ).strip().lower()
-                            
-                            if choice in ["y", "yes"]:
-                                # Continue the loop with approval
-                                continue
-                            else:
-                                # We need to tell the engine it was denied. 
-                                # For now, we break and the user turn ends.
-                                console.print(f"{INDENT}[danger]Permission Denied by user.[/danger]")
-                                break
+                            console.print(f"\n{INDENT}[warning] {event['content']} [/]")
 
                         elif event["type"] == "interrupt":
                             if active_status: active_status.stop()
