@@ -1,3 +1,7 @@
+"""
+git_tools.py — Tool functions for inspecting and operating on repository git state.
+"""
+
 import os
 import json
 import subprocess
