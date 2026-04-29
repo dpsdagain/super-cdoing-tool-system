@@ -18,7 +18,7 @@ class PermissionDecision:
 
 import os
 from pathlib import Path
-from config import WORKSPACE_ROOT
+from config import WORKSPACE_ROOT, FORBIDDEN_PATTERNS
 
 class PermissionManager:
     def __init__(self, mode: str = "ASK", max_delegation_depth: int = 2):
@@ -29,19 +29,7 @@ class PermissionManager:
         # Commands that are always dangerous
         self.dangerous_bash_commands = ["rm -rf", "sudo", "mkfs", "dd", "format", "del /s", "rd /s"]
         # Forbidden path components (folders or files)
-        self.forbidden_patterns = [".env", ".git", "id_rsa", "id_ed25519", "credentials", ".ssh", ".aws", ".config"]
-
-    def validate_path(self, target_path: str) -> bool:
-        """
-        The Path Sentinel: Ensures the path is within the WORKSPACE_ROOT
-        and doesn't target sensitive files or directories.
-        """
-        try:
-            from tool_registry import validate_path
-            validate_path(target_path)
-            return True
-        except Exception:
-            return False
+        self.forbidden_patterns = FORBIDDEN_PATTERNS
 
     def check_permission(self, tool_name: str, tool_args: Dict[str, Any], current_depth: int = 0) -> PermissionDecision:
         """
@@ -55,6 +43,7 @@ class PermissionManager:
                 return PermissionDecision(behavior="deny", reason=f"Maximum delegation depth ({current_depth}) reached.")
 
         # --- ENHANCED PATH SENTINEL ---
+        from tool_registry import validate_path
 
         # Intercept and validate ANY argument that might contain a path
         path_keys = ["file_path", "directory", "path", "context_files"]
@@ -64,12 +53,17 @@ class PermissionManager:
                 # Handle lists (like context_files)
                 if isinstance(value, list):
                     for p in value:
-                        if not self.validate_path(p):
+                        try:
+                            validate_path(p)
+                        except PermissionError as e:
                             logger.warning(f"SECURITY: Path Sentinel blocked access to item in {key}: {p}")
-                            return PermissionDecision(behavior="deny", reason=f"Path '{p}' is outside workspace or targets forbidden patterns.")
-                elif not self.validate_path(value):
-                    logger.warning(f"SECURITY: Path Sentinel blocked access to {key}: {value}")
-                    return PermissionDecision(behavior="deny", reason=f"Path '{value}' is outside workspace or targets forbidden patterns.")
+                            return PermissionDecision(behavior="deny", reason=str(e))
+                else:
+                    try:
+                        validate_path(value)
+                    except PermissionError as e:
+                        logger.warning(f"SECURITY: Path Sentinel blocked access to {key}: {value}")
+                        return PermissionDecision(behavior="deny", reason=str(e))
 
         if self.mode == "DENY":
             return PermissionDecision(behavior="deny", reason="Permission mode is DENY.")

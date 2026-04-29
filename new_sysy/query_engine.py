@@ -2,14 +2,11 @@ import logging
 import json
 import os
 from typing import List, Dict, Any, Optional
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import (
     HumanMessage, 
     AIMessage, 
     SystemMessage, 
     ToolMessage,
-    message_to_dict,
-    messages_from_dict
 )
 from config import (
     OPENROUTER_API_KEY, 

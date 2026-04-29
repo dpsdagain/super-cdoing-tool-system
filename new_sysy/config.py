@@ -86,6 +86,9 @@ TEMP_OUTPUT_DIR = str(APP_HOME / "temp_outputs")
 # The Workspace Boundary: Current directory where the agent was started
 WORKSPACE_ROOT = Path(os.getcwd()).resolve()
 
+# Security Policies
+FORBIDDEN_PATTERNS = [".env", ".git", "id_rsa", "id_ed25519", "credentials", ".ssh", ".aws", ".config"]
+
 # Ensure global directories exist
 os.makedirs(SESSION_DIR, exist_ok=True)
 os.makedirs(TEMP_OUTPUT_DIR, exist_ok=True)

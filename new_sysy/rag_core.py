@@ -110,15 +110,8 @@ def _truncate_ai_in_history(history: list[BaseMessage]) -> list[BaseMessage]:
             truncated.append(msg)
     return truncated
 
-def _est_tokens(msgs):
-    """Rough-cut estimation using the centralized ContextEstimator."""
-    return ContextEstimator.estimate_tokens(msgs)
+def _truncate_ai_in_history(history: list[BaseMessage]) -> list[BaseMessage]:
 
-def _content_len(content):
-    """Rough-cut estimation using the centralized ContextEstimator."""
-    return ContextEstimator.estimate_content_tokens(content)
-
-def compress_chat_history(history: list[BaseMessage], sentinel_state: str) -> list[BaseMessage]:
     """
     Intelligently trim the chat history based on Sentinel Summaries
     or Ghost History logic for token budget preservation.
@@ -313,7 +306,7 @@ class ContextCacheChain:
 
         # Token-aware sentinel trigger: estimate from FULL history so the
         # budget reflects the real conversation size, not the compressed window.
-        estimated_history_tokens = sum(_content_len(m.content) for m in full_history) // 3
+        estimated_history_tokens = sum(ContextEstimator.estimate_content_tokens(m.content) for m in full_history) // 3
         # Fire when history exceeds the token budget AND at least SENTINEL_INTERVAL
         # turns have passed since the last sentinel run.  Without the cooldown,
         # once the threshold is crossed it fires every single turn.

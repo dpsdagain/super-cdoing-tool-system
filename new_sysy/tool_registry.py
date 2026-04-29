@@ -8,7 +8,7 @@ import logging
 from typing import Any, Dict
 from pathlib import Path
 from pydantic import BaseModel
-from config import WORKSPACE_ROOT
+from config import WORKSPACE_ROOT, FORBIDDEN_PATTERNS
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +57,6 @@ class EngineContext(threading.local):
 
 current_engine = EngineContext()
 
-
-FORBIDDEN_PATTERNS = [".env", ".git", "id_rsa", "id_ed25519", "credentials", ".ssh", ".aws", ".config"]
 
 def validate_path(path: str) -> str:
     """Ensure the path is within the WORKSPACE_ROOT boundary and doesn't target sensitive files."""
