@@ -4,13 +4,12 @@ This module has been decomposed. Please see *_tools.py modules for implementatio
 """
 
 from tool_registry import (
-    AVAILABLE_TOOLS, 
     current_engine, 
     validate_path,
-    build_tool,
     ToolMetadata,
     _UNSORTED_TOOLS,
-    CORE_TOOL_NAMES
+    build_available_tools,
+    register_tool
 )
 
 from bash_tool import cleanup_active_processes, bash_tool
@@ -26,6 +25,8 @@ from misc_tools import (
     task_budget, update_plan, set_status, undo_last_edit, notebook_edit,
     system_doctor, cost_report, switch_model
 )
+
+AVAILABLE_TOOLS = build_available_tools()
 
 # Export everything needed by query_engine.py and others
 __all__ = [

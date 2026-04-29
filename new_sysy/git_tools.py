@@ -1,3 +1,4 @@
+from tool_registry import register_tool
 """
 git_tools.py — Git Integration Tools.
 git_status, git_diff, git_commit, git_root, git_log.
@@ -24,6 +25,7 @@ class GitLogInput(BaseModel):
     limit: int = Field(default=5, description='Number of recent commits to show.')
 
 
+@register_tool(name="git_status", description="Run 'git status' and return the result. Use to check which files are modified or untracked.", input_schema=GitStatusInput, is_read_only=True)
 def git_status() -> str:
     """Read the current git status of the project. Returns structured tracked/untracked files as JSON."""
     from git_manager import GitManager
@@ -31,6 +33,7 @@ def git_status() -> str:
     manager = GitManager(os.getcwd())
     return json.dumps(manager.get_file_status(), indent=2)
 
+@register_tool(name="git_diff", description="Run 'git diff' to see changes in tracked files. Supports diffing against a specific commit or staged changes.", input_schema=GitDiffInput, is_read_only=True)
 def git_diff(file_path: Optional[str] = None) -> str:
     """Show changes in the working directory. Automatically skips binary files."""
     from pathlib import Path
@@ -47,6 +50,7 @@ def git_diff(file_path: Optional[str] = None) -> str:
     except Exception as e:
         return f'Error running git diff: {str(e)}'
 
+@register_tool(name="git_commit", description="Stage changes and create a git commit. Must provide a descriptive commit message.", input_schema=GitCommitInput, is_read_only=False)
 def git_commit(message: str) -> str:
     """Commit staged changes to the repository."""
     try:
@@ -65,6 +69,7 @@ def git_root() -> str:
     root = manager.resolve_canonical_root()
     return str(root) if root else 'Not a git repository.'
 
+@register_tool(name="git_log", description="View the git commit history. Supports limiting the number of entries.", input_schema=GitLogInput, is_read_only=True)
 def git_log(limit: int = 5) -> str:
     """View recent project history (Commits)."""
     try:

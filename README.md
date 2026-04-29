@@ -48,7 +48,7 @@ After the rigorous Phase-3 refactor, the central agentic processing loop lives c
 ## 📦 Requirements & Installation
 
 1. Clone the repository
-2. Ensure you have python dependencies configured (e.g., `langchain`, `langchain-community`, `beautifulsoup4`, `chromadb`).
+2. Ensure you have python dependencies configured (e.g., `langchain`, `langchain-community`, `beautifulsoup4`, `chromadb`, `trafilatura`).
 3. Set your environment variables in `.env`:
 
 ```env

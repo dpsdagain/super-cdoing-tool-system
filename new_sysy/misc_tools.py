@@ -9,7 +9,7 @@ import subprocess
 import logging
 from typing import Optional
 from pydantic import BaseModel, Field
-from tool_registry import validate_path
+from tool_registry import register_tool, validate_path
 from config import WORKSPACE_ROOT
 
 logger = logging.getLogger(__name__)
@@ -66,21 +66,24 @@ class DoctorInput(BaseModel):
 #  Tool Functions
 # ═══════════════════════════════════════════════════════════════════════════
 
+@register_tool(name="switch_model", description="Switch the active LLM brain. Ideal for scaling intelligence up or down.", input_schema=SwitchModelInput, is_read_only=True)
 def switch_model(model_id: str) -> str:
     """Reboots the agent with a new LLM engine. All conversation context is preserved."""
     return f'[MODEL_SWITCHED] {model_id}'
 
+@register_tool(name="update_plan", description="Update the agent's current task plan and strategy.", input_schema=UpdatePlanInput, is_read_only=False)
 def update_plan(plan: str) -> str:
     """Synthetic Tool: Update your internal master plan."""
     return f'[PLAN_UPDATED] {plan}'
 
+@register_tool(name="set_status", description="Update the agent's current status message (what it is doing right now).", input_schema=SetStatusInput, is_read_only=False)
 def set_status(status: str) -> str:
     """Sets the current activity status for the TUI."""
     return f'[STATUS_UPDATED] {status}'
 
+@register_tool(name="cost_report", description="Show the current session's token usage and USD cost report.", input_schema=CostInput, is_read_only=True)
 def cost_report() -> str:
     """Generate a high-precision session cost report. Shows token usage and USD cost."""
-    from tool_registry import current_engine
     try:
         if not current_engine.instance or not current_engine.instance.usage_tracker:
             return 'Error: Usage Tracker not initialized.'
@@ -88,6 +91,7 @@ def cost_report() -> str:
     except Exception as e:
         return f'Error generating cost report: {str(e)}'
 
+@register_tool(name="system_doctor", description="Audit system health (binaries, network, workspace toxicity). Run if tools are failing.", input_schema=DoctorInput, is_read_only=True)
 def system_doctor() -> str:
     """Perform a full environmental diagnostic check. Audits binaries, network, and workspace toxicity."""
     from doctor import SystemDoctor
@@ -98,6 +102,7 @@ def system_doctor() -> str:
     except Exception as e:
         return f'Error running diagnostics: {str(e)}'
 
+@register_tool(name="notebook_edit", description="Surgically edit, insert, or delete Jupyter Notebook (.ipynb) cells.", input_schema=NotebookEditInput, is_read_only=False)
 def notebook_edit(file_path: str, cell_id: str, new_source: str, edit_mode: str='replace', cell_type: str='code') -> str:
     """Surgically edit a Jupyter Notebook cell. Resets execution state on modified cells."""
     from notebook_utils import NotebookMutator
@@ -107,9 +112,9 @@ def notebook_edit(file_path: str, cell_id: str, new_source: str, edit_mode: str=
         return str(e)
     return NotebookMutator.edit(file_path, cell_id, new_source, edit_mode, cell_type)
 
+@register_tool(name="undo_last_edit", description="Roll back file changes made in a specific turn. Use the tool_use_id of the turn to revert.", input_schema=UndoInput, is_read_only=False)
 def undo_last_edit(message_id: str) -> str:
     """Roll back file changes made in a specific turn."""
-    from tool_registry import current_engine
     try:
         if not current_engine.instance or not current_engine.instance.history_manager:
             return 'Error: History Manager not initialized.'
@@ -127,13 +132,14 @@ def linter_tool(file_path: str) -> str:
     except PermissionError as e:
         return str(e)
     if file_path.endswith('.py'):
-        try:
-            result = subprocess.run(['flake8', file_path], capture_output=True, text=True)
-            if result.returncode == 0:
-                return 'No linting errors found.'
-            return result.stdout
-        except FileNotFoundError:
+        import shlex
+        from bash_tool import bash_tool
+        result = bash_tool(f"flake8 {shlex.quote(file_path)}")
+        if "command not found" in result.lower() or "not recognized" in result.lower():
             return 'Linter (flake8) not installed. Use bash tool to run a specific linter.'
+        if not result.strip() or "Command executed successfully" in result:
+            return 'No linting errors found.'
+        return result
     return 'Linter tool currently only supports Python (.py) files natively. Use bash for others.'
 
 def memory_tool(fact: str) -> str:
@@ -197,6 +203,7 @@ def task_budget(max_tokens: int) -> str:
     except Exception as e:
         return f'Error setting budget: {str(e)}'
 
+@register_tool(name="ask_user", description="Ask the user a question to clarify requirements or get feedback.", input_schema=AskUserInput, is_read_only=True)
 def ask_user(question: str) -> str:
     """Pause execution and ask the human user a question."""
     return f'[INTERRUPT_REQUIRED] The agent needs human input: {question}'

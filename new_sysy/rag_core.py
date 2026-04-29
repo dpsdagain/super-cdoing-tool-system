@@ -203,11 +203,8 @@ class ContextBudgeter:
 
         # Truncation loop
         budget = self.get_budget()
-        fmt_overhead = 80
-        total_chars = sum(len(d.page_content) + fmt_overhead for d in final_docs)
-        while final_docs and (total_chars // 3) > budget:
-            removed = final_docs.pop(-1)
-            total_chars -= (len(removed.page_content) + fmt_overhead)
+        while final_docs and ContextEstimator.estimate_content_tokens([d.page_content for d in final_docs]) > budget:
+            final_docs.pop(-1)
         return final_docs
 
 
@@ -307,7 +304,7 @@ class ContextCacheChain:
 
         # 7. Sentinel Summarization (Background)
         full_history = inputs.get("full_history", history)
-        est_tokens = sum(ContextEstimator.estimate_content_tokens(m.content) for m in full_history) // 3
+        est_tokens = ContextEstimator.estimate_tokens(full_history)
         turn_count = inputs.get("global_turn_count", sum(1 for m in history if isinstance(m, HumanMessage)))
         
         if (turn_count > 0 and self._sentinel_failures["count"] < self.MAX_SENTINEL_FAILURES and 

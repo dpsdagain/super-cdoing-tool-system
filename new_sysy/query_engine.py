@@ -49,13 +49,10 @@ Respond ONLY with JSON:
 }"""
 
 
-import threading
-import tools
+from tools import AVAILABLE_TOOLS, cleanup_active_processes
+from tool_registry import current_engine
 
 logger = logging.getLogger(__name__)
-
-# Use the thread-local engine context defined in tools.py
-current_engine = tools.current_engine
 
 SYSTEM_PROMPT = """You are an autonomous AI software engineer operating on a Windows (win32) system. You have access to a set of tools to research, read, and edit code, as well as execute shell commands.
 
@@ -89,66 +86,7 @@ class QueryState:
         self.executed_actions: List[str] = [] # Detect repeating loops
         self.is_terminal = False
 
-class WorkerAgent:
-    """
-    Isolated Sub-Agent (Worker) with its own context window.
-    Designed for surgical sub-tasks (Research, Testing, Linter fixes).
-    """
-    def __init__(self, delegation_depth: int, main_model: str, permission_mode: str = "ASK"):
-        self.depth = delegation_depth
-        self.model = main_model
-        # Workers inherit the permission mode from their coordinator
-        self.engine = QueryEngine(
-            session_id=f"worker_{os.getpid()}_{self.depth}",
-            model_id=self.model,
-            permission_mode=permission_mode,
-            delegation_depth=self.depth
-        )
-
-    def solve(self, task: str) -> str:
-        """Executes the sub-task and returns the final report."""
-        logger.info(f"Worker (Depth {self.depth}) starting task: {task[:50]}...")
-        
-        # Guard: Workers run in the same process/thread by default.
-        # We must temporarily swap the current_engine.instance so tools
-        # called by the worker reference the correct engine instance.
-        import tools
-        previous_instance = tools.current_engine.instance
-        tools.current_engine.instance = self.engine
-        try:
-            answer, _ = self.engine.process_query(task)
-            return answer
-        finally:
-            tools.current_engine.instance = previous_instance
-
-class Coordinator:
-    """
-    Multi-Agent Manager (Coordinator).
-    Orchestrates workers, parallelizes tasks, and prevents Strategic Drift.
-    """
-    def __init__(self, engine: Any):
-        self.manager_engine = engine # The main QueryEngine session
-        self.max_workers = 3
-        self.active_workers: List[WorkerAgent] = []
-
-    def delegate(self, task: str, context_summary: str = "") -> str:
-        """
-        Spawns an isolated Worker to solve a sub-problem.
-        (Mirrors Coordinator.ts:delegation logic)
-        """
-        if self.manager_engine.delegation_depth >= 3:
-            return "Error: Maximum delegation depth reached."
-        
-        worker = WorkerAgent(
-            delegation_depth=self.manager_engine.delegation_depth + 1,
-            main_model=self.manager_engine.model_id,
-            permission_mode=self.manager_engine.permission_manager.mode
-        )
-        
-        # Hydrate the worker with relevant context from the manager
-        full_task = f"ROLE: Assistant Worker. CONTEXT: {context_summary}\nTASK: {task}"
-        result = worker.solve(full_task)
-        return f"--- WORKER REPORT (Depth {worker.depth}) ---\n{result}\n--- END REPORT ---"
+from coordinator import Coordinator
 
 class QueryEngine:
     """The High-Fidelity Agentic Engine Loop (F-01)."""
@@ -162,8 +100,7 @@ class QueryEngine:
         self.coordinator = Coordinator(self)
         
         # Register engine globally for tool access (F-Coordinator)
-        import tools
-        tools.current_engine.instance = self
+        current_engine.instance = self
         self.temperature = temperature
         self.root_dir = os.getcwd()
 
@@ -205,7 +142,7 @@ class QueryEngine:
                     "parameters": info["input_schema"].model_json_schema(),
                 },
             }
-            for name, info in tools.AVAILABLE_TOOLS.items()
+            for name, info in AVAILABLE_TOOLS.items()
         ]
         self.llm_with_tools = self.llm.bind_tools(self.tools_metadata)
 
@@ -270,11 +207,10 @@ class QueryEngine:
 
     def execute_tool(self, name: str, args: Dict[str, Any], tool_id: str = "unknown") -> str:
         """Execute a tool by name with provided arguments."""
-        import tools
-        if name not in tools.AVAILABLE_TOOLS:
+        if name not in AVAILABLE_TOOLS:
             return f"Error: Tool '{name}' not found."
 
-        tool_info = tools.AVAILABLE_TOOLS[name]
+        tool_info = AVAILABLE_TOOLS[name]
         try:
             # Validate args against pydantic schema
             validated_args = tool_info["input_schema"](**args)
@@ -404,8 +340,7 @@ Based on this status, determine the next action."""
             except (Exception, KeyboardInterrupt) as e:
                 # 🕯️ The Tombstone Phase: Burn the orphaned trail
                 # 🛑 GHOST DISCARD: Force-terminate any active tool processes (bash, git, etc.)
-                import tools
-                tools.cleanup_active_processes()
+                cleanup_active_processes()
                 
                 orphans = state.messages[history_length_before_tick:]
                 if orphans:

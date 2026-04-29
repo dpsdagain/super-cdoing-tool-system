@@ -11,7 +11,7 @@ from config import WORKSPACE_ROOT, RETRIEVER_K, RERANK_TOP_K, USE_RERANKER
 logger = logging.getLogger(__name__)
 
 def _validate_path(path: str) -> str:
-    from tool_registry import validate_path
+    from tool_registry import register_tool, validate_path
     return validate_path(path)
 
 
@@ -70,6 +70,7 @@ class UndoInput(BaseModel):
 #  Tool Functions (lazy imports to avoid circular deps at module load)
 # ═══════════════════════════════════════════════════════════════════════════
 
+@register_tool(name="grep_search", description="Search for a pattern across the codebase using regex. Returns file paths and matching lines.", input_schema=GrepInput, is_read_only=True)
 def grep_tool(pattern: str, include_pattern: Optional[str]=None, exclude_pattern: Optional[str]=None, case_sensitive: bool=False) -> str:
     """Search for a pattern across the codebase using Python-native regex for platform consistency."""
     import re
@@ -102,6 +103,7 @@ def grep_tool(pattern: str, include_pattern: Optional[str]=None, exclude_pattern
         return f'No matches found for pattern: {pattern}'
     return '\n'.join(matches[:500])
 
+@register_tool(name="multi_file_edit", description="Apply multiple surgical replacements to a single file in one go. Much more efficient than multiple file_edit calls.", input_schema=MultiFileEditInput, is_read_only=False)
 def multi_file_edit(file_path: str, replacements: List[Replacement]) -> str:
     """Apply multiple surgical replacements to a single file in one go."""
     try:
@@ -130,6 +132,7 @@ def multi_file_edit(file_path: str, replacements: List[Replacement]) -> str:
     except Exception as e:
         return f'Error in multi_file_edit: {str(e)}'
 
+@register_tool(name="code_search", description="Search the codebase for relevant functions, classes, or logic using keywords or natural language.", input_schema=CodeSearchInput, is_read_only=True)
 def code_search(query: str, collection_name: str='default', k: int=RETRIEVER_K) -> str:
     """Search the codebase using hybrid search (Vector + BM25)."""
     from backend import load_existing_chroma
@@ -150,6 +153,7 @@ def code_search(query: str, collection_name: str='default', k: int=RETRIEVER_K) 
         formatted_results.append(f'--- Result {i + 1} ({source}) ---\n{doc.page_content}')
     return '\n\n'.join(formatted_results)
 
+@register_tool(name="file_read", description="Read the content of a file. Supports line ranges for large files.", input_schema=FileReadInput, is_read_only=True)
 def file_read(file_path: str, start_line: Optional[int]=None, end_line: Optional[int]=None) -> str:
     """Read a file's content, optionally within a line range."""
     try:
@@ -172,6 +176,7 @@ def file_read(file_path: str, start_line: Optional[int]=None, end_line: Optional
     except Exception as e:
         return f'Error reading file: {str(e)}'
 
+@register_tool(name="file_edit", description="Edit a file by replacing an exact string with a new string. This is safer than overwriting the whole file.", input_schema=FileEditInput, is_read_only=False)
 def file_edit(file_path: str, old_string: str, new_string: str) -> str:
     """Surgically replace old_string with new_string in a file (F-05 Parity)."""
     from edit_utils import FuzzyMatcher
@@ -197,6 +202,7 @@ def file_edit(file_path: str, old_string: str, new_string: str) -> str:
     except Exception as e:
         return f'Error editing file: {str(e)}'
 
+@register_tool(name="file_write", description="Create a new file or completely overwrite an existing file with new content.", input_schema=FileWriteInput, is_read_only=False)
 def file_write(file_path: str, content: str) -> str:
     """Create or overwrite a file with the provided content."""
     try:
@@ -210,6 +216,7 @@ def file_write(file_path: str, content: str) -> str:
     except Exception as e:
         return f'Error writing file: {str(e)}'
 
+@register_tool(name="glob", description="Search for files using glob patterns. Returns a list of relative paths.", input_schema=GlobInput, is_read_only=True)
 def glob_tool(pattern: str) -> str:
     """Find files matching a glob pattern."""
     import glob
@@ -229,6 +236,7 @@ def glob_tool(pattern: str) -> str:
     except Exception as e:
         return f'Error executing glob: {str(e)}'
 
+@register_tool(name="brief", description="Generate a high-level summary of a file's structure (functions, classes, imports).", input_schema=BriefInput, is_read_only=True)
 def brief_tool(file_path: str) -> str:
     """Provide a brief outline of a file to save context."""
     try:
@@ -262,6 +270,7 @@ def brief_tool(file_path: str) -> str:
     except Exception as e:
         return f'Error generating brief: {str(e)}'
 
+@register_tool(name="symbol_search", description="Search for a specific code symbol (class or function) definition across the codebase.", input_schema=SymbolSearchInput, is_read_only=True)
 def symbol_search(symbol: str) -> str:
     """Find the definition of a class or function across the codebase (Python-native)."""
     import re

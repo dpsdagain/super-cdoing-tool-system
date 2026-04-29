@@ -1,3 +1,4 @@
+from tool_registry import register_tool
 """
 web_tools.py — Web Search and URL Fetching Tools.
 """
@@ -16,6 +17,7 @@ class WebFetchInput(BaseModel):
     url: str = Field(description='The URL of the page to fetch and read.')
 
 
+@register_tool(name="read_url", description="Fetch and distill web documentation or articles into Markdown.", input_schema=WebFetchInput, is_read_only=True)
 def read_url(url: str, prompt: Optional[str] = None) -> str:
     """Fetch and distill content from a URL. Best for reading documentation websites."""
     from web_utils import WebFetcher
@@ -24,6 +26,7 @@ def read_url(url: str, prompt: Optional[str] = None) -> str:
         return f"Error fetching URL: {results['error']}"
     return f"--- Content from {url} ---\n{results['content']}\n\n[Total Length: {results['length']} chars]"
 
+@register_tool(name="web_search", description="Perform a Google search to find information outside the codebase.", input_schema=WebSearchInput, is_read_only=True)
 def web_search(query: str) -> str:
     """Perform a web search using a robust strategy with specialized headers."""
     import requests
@@ -75,6 +78,7 @@ def is_safe_url(url: str) -> bool:
     except Exception:
         return False
 
+@register_tool(name="web_fetch", description="Fetch a URL and extract its main content as Markdown. Ideal for reading documentation.", input_schema=WebFetchInput, is_read_only=True)
 def web_fetch(url: str) -> str:
     """Fetch webpage content with improved extraction and noise reduction."""
     if not is_safe_url(url):

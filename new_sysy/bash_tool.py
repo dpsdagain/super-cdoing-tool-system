@@ -49,6 +49,7 @@ STALL_PATTERNS = [
 ]
 
 
+@register_tool(name="bash", description="Execute a shell command. Use this for running tests, build scripts, or git commands.", input_schema=BashInput, is_read_only=False)
 def bash_tool(command: str) -> str:
     """Execute a shell command with real-time stall detection and process-group termination."""
 
@@ -60,7 +61,7 @@ def bash_tool(command: str) -> str:
             return f"Error: Command rejected for security reasons. {security_result['reason']}"
 
         # Path Sentinel: Prevent commands from targeting paths outside the workspace
-        from tool_registry import validate_path
+        from tool_registry import register_tool, validate_path
         paths = re.findall(r'((?:[a-zA-Z]:\\|[/\\])[\w\s.-]+(?:[/\\][\w\s.-]+)*)', command)
         for p in paths:
             try:
