@@ -25,6 +25,7 @@ class ToolMetadata(BaseModel):
     is_read_only: bool = False
     is_destructive: bool = False
     is_concurrency_safe: bool = False
+    requires_engine: bool = False
 
 _UNSORTED_TOOLS = {}
 
@@ -35,6 +36,7 @@ def register_tool(
     is_read_only: bool = False,
     is_destructive: bool = False,
     is_concurrency_safe: bool = False,
+    requires_engine: bool = False,
 ) -> Callable:
     """
     Centralized tool decorator that enforces security defaults.
@@ -49,24 +51,10 @@ def register_tool(
             "is_read_only": is_read_only,
             "is_destructive": is_destructive,
             "is_concurrency_safe": is_concurrency_safe,
+            "requires_engine": requires_engine,
         }
         return func
     return decorator
-
-
-# Replace threading.local with contextvars for global state
-_engine_ctx_var = contextvars.ContextVar('current_engine', default=None)
-
-class EngineContext:
-    @property
-    def instance(self):
-        return _engine_ctx_var.get()
-        
-    @instance.setter
-    def instance(self, val):
-        _engine_ctx_var.set(val)
-
-current_engine = EngineContext()
 
 
 def validate_path(path: str) -> str:

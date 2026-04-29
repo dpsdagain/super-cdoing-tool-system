@@ -4,14 +4,19 @@ Provides code_search, file_read, file_edit, file_write, grep, glob, brief, and s
 """
 import os
 import logging
+import re
+import fnmatch
+import glob
+import ast
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from config import WORKSPACE_ROOT, RETRIEVER_K, RERANK_TOP_K, USE_RERANKER
+from tool_registry import register_tool, validate_path
+from edit_utils import FuzzyMatcher
 
 logger = logging.getLogger(__name__)
 
 def _validate_path(path: str) -> str:
-    from tool_registry import register_tool, validate_path
     return validate_path(path)
 
 
@@ -73,8 +78,6 @@ class UndoInput(BaseModel):
 @register_tool(name="grep_search", description="Search for a pattern across the codebase using regex. Returns file paths and matching lines.", input_schema=GrepInput, is_read_only=True)
 def grep_tool(pattern: str, include_pattern: Optional[str]=None, exclude_pattern: Optional[str]=None, case_sensitive: bool=False) -> str:
     """Search for a pattern across the codebase using Python-native regex for platform consistency."""
-    import re
-    import fnmatch
     flags = re.IGNORECASE if not case_sensitive else 0
     try:
         regex = re.compile(pattern, flags)
@@ -219,7 +222,6 @@ def file_write(file_path: str, content: str) -> str:
 @register_tool(name="glob", description="Search for files using glob patterns. Returns a list of relative paths.", input_schema=GlobInput, is_read_only=True)
 def glob_tool(pattern: str) -> str:
     """Find files matching a glob pattern."""
-    import glob
     try:
         matches = glob.glob(pattern, recursive=True)
         if not matches:

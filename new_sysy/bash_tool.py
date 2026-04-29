@@ -11,8 +11,11 @@ import threading
 import logging
 from queue import Queue, Empty
 from pydantic import BaseModel, Field
+from tool_registry import register_tool, validate_path
+from bash_security import BashSecurityAnalyzer
 
 logger = logging.getLogger(__name__)
+
 
 _active_process_groups = []
 _process_lock = threading.Lock()
@@ -55,13 +58,11 @@ def bash_tool(command: str) -> str:
 
     try:
         # Security: semantic command validation
-        from bash_security import BashSecurityAnalyzer
         security_result = BashSecurityAnalyzer.analyze(command)
         if not security_result["allowed"]:
             return f"Error: Command rejected for security reasons. {security_result['reason']}"
 
         # Path Sentinel: Prevent commands from targeting paths outside the workspace
-        from tool_registry import register_tool, validate_path
         paths = re.findall(r'((?:[a-zA-Z]:\\|[/\\])[\w\s.-]+(?:[/\\][\w\s.-]+)*)', command)
         for p in paths:
             try:

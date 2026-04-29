@@ -1,4 +1,4 @@
-from tool_registry import register_tool, current_engine
+from tool_registry import register_tool
 """
 agent_tools.py — Sub-agent Delegation Tool.
 """
@@ -15,16 +15,16 @@ class AgentDelegateInput(BaseModel):
     current_depth: int = Field(default=0, description='Internal field to track recursion.', exclude=True)
 
 
-@register_tool(name="agent_delegate", description="Spawn a sub-agent to handle a complex sub-task. Returns the agent's final report.", input_schema=AgentDelegateInput, is_read_only=False)
-def agent_delegate(task: str, context_files: List[str] = []) -> str:
+@register_tool(name="agent_delegate", description="Spawn a sub-agent to handle a complex sub-task. Returns the agent's final report.", input_schema=AgentDelegateInput, is_read_only=False, requires_engine=True)
+def agent_delegate(task: str, context_files: List[str] = [], _engine_instance=None) -> str:
     """
     Spawn a sub-agent to handle a specific delegated task.
     Orchestrated by the Multi-Agent Coordinator.
     """
-    if current_engine.instance is None:
+    if _engine_instance is None:
         return 'Error: Coordinator not initialized.'
     context_summary = f"Focus files: {', '.join(context_files)}" if context_files else 'General repository context.'
     try:
-        return current_engine.instance.coordinator.delegate(task, context_summary)
+        return _engine_instance.coordinator.delegate(task, context_summary)
     except Exception as e:
         return f'Error in agent delegation: {str(e)}'

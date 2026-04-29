@@ -4,7 +4,6 @@ This module has been decomposed. Please see *_tools.py modules for implementatio
 """
 
 from tool_registry import (
-    current_engine, 
     validate_path,
     ToolMetadata,
     _UNSORTED_TOOLS,
@@ -31,7 +30,6 @@ AVAILABLE_TOOLS = build_available_tools()
 # Export everything needed by query_engine.py and others
 __all__ = [
     "AVAILABLE_TOOLS", 
-    "current_engine", 
     "cleanup_active_processes",
     "validate_path"
 ]

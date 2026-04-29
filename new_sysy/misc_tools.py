@@ -7,10 +7,16 @@ undercover_mode, task_budget, ask_user.
 import os
 import subprocess
 import logging
+import json
+import shlex
+import ast
 from typing import Optional
 from pydantic import BaseModel, Field
 from tool_registry import register_tool, validate_path
 from config import WORKSPACE_ROOT
+from bash_tool import bash_tool
+from doctor import SystemDoctor
+from notebook_utils import NotebookMutator
 
 logger = logging.getLogger(__name__)
 
@@ -81,21 +87,19 @@ def set_status(status: str) -> str:
     """Sets the current activity status for the TUI."""
     return f'[STATUS_UPDATED] {status}'
 
-@register_tool(name="cost_report", description="Show the current session's token usage and USD cost report.", input_schema=CostInput, is_read_only=True)
-def cost_report() -> str:
+@register_tool(name="cost_report", description="Show the current session's token usage and USD cost report.", input_schema=CostInput, is_read_only=True, requires_engine=True)
+def cost_report(_engine_instance=None) -> str:
     """Generate a high-precision session cost report. Shows token usage and USD cost."""
     try:
-        if not current_engine.instance or not current_engine.instance.usage_tracker:
+        if not _engine_instance or not _engine_instance.usage_tracker:
             return 'Error: Usage Tracker not initialized.'
-        return current_engine.instance.usage_tracker.get_report()
+        return _engine_instance.usage_tracker.get_report()
     except Exception as e:
         return f'Error generating cost report: {str(e)}'
 
 @register_tool(name="system_doctor", description="Audit system health (binaries, network, workspace toxicity). Run if tools are failing.", input_schema=DoctorInput, is_read_only=True)
 def system_doctor() -> str:
     """Perform a full environmental diagnostic check. Audits binaries, network, and workspace toxicity."""
-    from doctor import SystemDoctor
-    import json
     try:
         report = SystemDoctor.audit()
         return f'--- System Health Report ---\n{json.dumps(report, indent=2)}'
@@ -105,26 +109,26 @@ def system_doctor() -> str:
 @register_tool(name="notebook_edit", description="Surgically edit, insert, or delete Jupyter Notebook (.ipynb) cells.", input_schema=NotebookEditInput, is_read_only=False)
 def notebook_edit(file_path: str, cell_id: str, new_source: str, edit_mode: str='replace', cell_type: str='code') -> str:
     """Surgically edit a Jupyter Notebook cell. Resets execution state on modified cells."""
-    from notebook_utils import NotebookMutator
     try:
         file_path = validate_path(file_path)
     except Exception as e:
         return str(e)
     return NotebookMutator.edit(file_path, cell_id, new_source, edit_mode, cell_type)
 
-@register_tool(name="undo_last_edit", description="Roll back file changes made in a specific turn. Use the tool_use_id of the turn to revert.", input_schema=UndoInput, is_read_only=False)
-def undo_last_edit(message_id: str) -> str:
+@register_tool(name="undo_last_edit", description="Roll back file changes made in a specific turn. Use the tool_use_id of the turn to revert.", input_schema=UndoInput, is_read_only=False, requires_engine=True)
+def undo_last_edit(message_id: str, _engine_instance=None) -> str:
     """Roll back file changes made in a specific turn."""
     try:
-        if not current_engine.instance or not current_engine.instance.history_manager:
+        if not _engine_instance or not _engine_instance.history_manager:
             return 'Error: History Manager not initialized.'
-        reverted = current_engine.instance.history_manager.rollback(message_id)
+        reverted = _engine_instance.history_manager.rollback(message_id)
         if not reverted:
             return f'No changes found to undo for turn ID: {message_id}'
         return f'Successfully reverted changes for {len(reverted)} files. Turn ID: {message_id}'
     except Exception as e:
         return f'Error performing undo: {str(e)}'
 
+@register_tool(name="linter_tool", description="Run a basic linter check on a file.", input_schema=LinterInput, is_read_only=True)
 def linter_tool(file_path: str) -> str:
     """Run a basic linter check on a file."""
     try:
@@ -132,8 +136,6 @@ def linter_tool(file_path: str) -> str:
     except PermissionError as e:
         return str(e)
     if file_path.endswith('.py'):
-        import shlex
-        from bash_tool import bash_tool
         result = bash_tool(f"flake8 {shlex.quote(file_path)}")
         if "command not found" in result.lower() or "not recognized" in result.lower():
             return 'Linter (flake8) not installed. Use bash tool to run a specific linter.'
@@ -142,23 +144,31 @@ def linter_tool(file_path: str) -> str:
         return result
     return 'Linter tool currently only supports Python (.py) files natively. Use bash for others.'
 
+@register_tool(name="memory_tool", description="Save a memory or preference to a persistent MEMORY.md file.", input_schema=MemoryInput, is_read_only=False)
 def memory_tool(fact: str) -> str:
     """Save a memory or preference to a persistent MEMORY.md file."""
     try:
+        # Phase 7: Use unified file_read/file_write logic if possible, 
+        # but for simplicity we'll just ensure it's tracked by QueryEngine
         memory_path = os.path.join(str(WORKSPACE_ROOT), 'MEMORY.md')
+        
+        # We'll use file_read/file_write internally to trigger checkpoints if we had them as imports,
+        # but since they are in file_tools, and file_tools imports this (circular),
+        # we'll stick to open() but ensure QueryEngine checkpoints it.
+        # Actually, let's just use the canonical way.
         with open(memory_path, 'a', encoding='utf-8') as f:
             f.write(f'- {fact}\n')
         return f'Memory saved successfully to {memory_path}.'
     except Exception as e:
         return f'Error saving memory: {str(e)}'
 
+@register_tool(name="arch_visualizer", description="Generate a high-level architecture overview in Mermaid format.", input_schema=ArchVisualizerInput, is_read_only=True)
 def arch_visualizer(directory: str='.') -> str:
     """Generate a high-level architecture overview in Mermaid format."""
     try:
         directory = validate_path(directory)
     except PermissionError as e:
         return str(e)
-    import ast
     mermaid = ['classDiagram']
     for root, _, files in os.walk(directory):
         if any((exc in root for exc in ['__pycache__', 'venv', '.git'])):
@@ -182,6 +192,7 @@ def arch_visualizer(directory: str='.') -> str:
         return 'No classes found to visualize.'
     return 'Architecture Diagram (Mermaid):\n\n```mermaid\n' + '\n'.join(mermaid) + '\n```'
 
+@register_tool(name="undercover_mode", description="Strip AI identifiers and local paths from text for professional output.", input_schema=UndercoverInput, is_read_only=True)
 def undercover_mode(text: str) -> str:
     """Strip AI identifiers and local paths from text for professional output."""
     import re
@@ -193,11 +204,11 @@ def undercover_mode(text: str) -> str:
     cleaned = re.sub('/(?:[\\w.-]+/)+[\\w.-]+', '[REDACTED_PATH]', cleaned)
     return cleaned.strip()
 
+@register_tool(name="task_budget", description="Set or check a token budget for the current task.", input_schema=TaskBudgetInput, is_read_only=False)
 def task_budget(max_tokens: int) -> str:
     """Set or check a token budget for the current task."""
     try:
         with open('budget_config.json', 'w') as f:
-            import json
             json.dump({'max_tokens': max_tokens}, f)
         return f'Budget set to {max_tokens} tokens. Agent will now monitor usage against this limit.'
     except Exception as e:

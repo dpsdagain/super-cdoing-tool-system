@@ -1,11 +1,13 @@
 import logging
+import subprocess
 from typing import List, Any, Dict, Optional
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from result_archive import ResultArchive
 from config import OLLAMA_CLOUD_BASE_URL, OLLAMA_CLOUD_API_KEY as API_KEY
 from estimator import ContextEstimator
-import subprocess
+from llm_factory import ModelFactory
+from bash_tool import bash_tool
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +24,6 @@ class ContextManager:
         # Layer 5: Emergency Summarizer (Dependency Injected)
         if summarizer_llm is None:
             # Fallback for backward compatibility
-            from llm_factory import ModelFactory
             self.summarizer_llm = ModelFactory.create_model("ollama-cloud:gemma2:9b-cloud", temperature=0.0)
         else:
             self.summarizer_llm = summarizer_llm
@@ -123,11 +124,8 @@ class ContextManager:
         summary = self._generate_summary(middle)
         
         # 2. Re-inject Project Context (Git + Skills)
-        git_status = "Unknown"
-        try:
-            git_status = subprocess.check_output(["git", "status", "--short"], stderr=subprocess.STDOUT).decode()
-        except Exception:
-            pass
+        from bash_tool import bash_tool
+        git_status = bash_tool("git status --short")
         
         discovered_skills = set()
         for m in messages:
@@ -166,3 +164,4 @@ class ContextManager:
             return res.content
         except Exception:
             return "History summarized."
+arized."

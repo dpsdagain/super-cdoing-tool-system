@@ -1,16 +1,19 @@
-from tool_registry import register_tool
-"""
-git_tools.py — Git Integration Tools.
-git_status, git_diff, git_commit, git_root, git_log.
-"""
 import os
+import json
 import subprocess
 import logging
 from typing import Optional
 from pydantic import BaseModel, Field
+from pathlib import Path
+from tool_registry import register_tool
+from git_manager import GitManager
 
 logger = logging.getLogger(__name__)
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Pydantic Input Schemas
+# ═══════════════════════════════════════════════════════════════════════════
 
 class GitStatusInput(BaseModel):
     pass
@@ -28,15 +31,12 @@ class GitLogInput(BaseModel):
 @register_tool(name="git_status", description="Run 'git status' and return the result. Use to check which files are modified or untracked.", input_schema=GitStatusInput, is_read_only=True)
 def git_status() -> str:
     """Read the current git status of the project. Returns structured tracked/untracked files as JSON."""
-    from git_manager import GitManager
-    import json
     manager = GitManager(os.getcwd())
     return json.dumps(manager.get_file_status(), indent=2)
 
 @register_tool(name="git_diff", description="Run 'git diff' to see changes in tracked files. Supports diffing against a specific commit or staged changes.", input_schema=GitDiffInput, is_read_only=True)
 def git_diff(file_path: Optional[str] = None) -> str:
     """Show changes in the working directory. Automatically skips binary files."""
-    from pathlib import Path
     if file_path:
         ext = Path(file_path).suffix.lower()
         if ext in ['.pdf', '.exe', '.dll', '.bin', '.png', '.jpg', '.so']:
@@ -62,9 +62,9 @@ def git_commit(message: str) -> str:
     except Exception as e:
         return f'Error running git commit: {str(e)}'
 
+@register_tool(name="git_root", description="Get the absolute path to the root of the git repository.", input_schema=GitStatusInput, is_read_only=True)
 def git_root() -> str:
     """Find the canonical git root of the project, resolving through worktrees/submodules."""
-    from git_manager import GitManager
     manager = GitManager(os.getcwd())
     root = manager.resolve_canonical_root()
     return str(root) if root else 'Not a git repository.'

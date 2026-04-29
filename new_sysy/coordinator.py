@@ -1,7 +1,6 @@
 import os
 import logging
 from typing import List, Any
-from tool_registry import current_engine
 
 logger = logging.getLogger(__name__)
 
@@ -26,16 +25,13 @@ class WorkerAgent:
         """Executes the sub-task and returns the final report."""
         logger.info(f"Worker (Depth {self.depth}) starting task: {task[:50]}...")
         
-        # Guard: Workers run in the same process/thread by default.
-        # We must temporarily swap the current_engine.instance so tools
-        # called by the worker reference the correct engine instance.
-        previous_instance = current_engine.instance
-        current_engine.instance = self.engine
+        # Parallel-Safe: No global state mutation required.
+        # Tools called by self.engine will have self.engine injected via ToolDispatcher.
         try:
             answer, _ = self.engine.process_query(task)
             return answer
-        finally:
-            current_engine.instance = previous_instance
+        except Exception as e:
+            return f"Worker error: {str(e)}"
 
 class Coordinator:
     """
