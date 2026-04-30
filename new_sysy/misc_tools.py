@@ -59,6 +59,9 @@ class MemoryInput(BaseModel):
 class UndercoverInput(BaseModel):
     text: str = Field(description='The text to strip AI identifiers and local paths from.')
 
+class UndoInput(BaseModel):
+    message_id: str = Field(description="The tool_use_id of the turn to revert.")
+
 class CostInput(BaseModel):
     """No arguments needed — generates cost report from session data."""
     pass

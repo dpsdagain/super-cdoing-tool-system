@@ -2,6 +2,7 @@
 tools.py - Agentic Engine Tool Facade
 This module has been decomposed. Please see *_tools.py modules for implementations.
 """
+# pylint: disable=unused-import
 
 from tool_registry import (
     validate_path,
@@ -16,8 +17,8 @@ from file_tools import (
     code_search, file_read, file_write, file_edit, multi_file_edit,
     grep_tool, glob_tool, brief_tool, symbol_search
 )
-from git_tools import git_status, git_diff, git_commit, git_root, git_log
-from web_tools import web_search, web_fetch, read_url
+from git_manager import git_status, git_diff, git_commit, git_root, git_log
+from web_utils import web_search, web_fetch, read_url
 from agent_tools import agent_delegate
 from misc_tools import (
     linter_tool, memory_tool, ask_user, arch_visualizer, undercover_mode,

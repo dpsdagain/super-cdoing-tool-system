@@ -164,4 +164,3 @@ class ContextManager:
             return res.content
         except Exception:
             return "History summarized."
-arized."

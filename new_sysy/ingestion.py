@@ -40,6 +40,8 @@ from chunkers import ASTChunker, RegexHDLChunker, get_text_splitter
 from fts5_engine import SQLiteFTS5BM25
 from collection_manager import load_existing_chroma, invalidate_collection_info_cache
 
+logger = logging.getLogger(__name__)
+
 """
 backend.py — Data Ingestion Engine.
 
@@ -99,7 +101,7 @@ def load_and_chunk_pdf(file_path: str) -> list[Document]:
         )
         return [merged_doc]
 
-    splitter = _get_splitter(chunk_size_override=PDF_CHUNK_SIZE)
+    splitter = get_text_splitter(chunk_size_override=PDF_CHUNK_SIZE)
     chunks = splitter.split_documents(raw_docs)
     
     # Enrich metadata for cache-stable sorting
@@ -195,9 +197,9 @@ def load_and_chunk_codebase(
         if len(content) < ZERO_CHUNK_THRESHOLD:
             # Extract call-graph and constant-reference metadata even for
             # zero-chunks so FTS5 search_by_calls_batch / search_by_constants_batch
-            # can find them.  Without this, config.py (the most common zero-chunk)
+            # can find them.            # config.py (the most common zero-chunk)
             # is invisible to Fix E and Fix G.
-            _zc_chunker = CodeASTChunker()
+            _zc_chunker = ASTChunker()
             _zc_calls = " ".join(_zc_chunker._extract_called_functions(content))
             _zc_consts = " ".join(_zc_chunker._extract_referenced_constants(content))
             chunk = Document(
@@ -217,7 +219,7 @@ def load_and_chunk_codebase(
             continue
 
         # ── AST-Aware Chunking (New Upgrade) ──────────────────────────────
-        ast_chunker = CodeASTChunker(chunk_size=CODE_CHUNK_SIZE)
+        ast_chunker = ASTChunker(chunk_size=CODE_CHUNK_SIZE)
         ast_chunks = ast_chunker.chunk_file(content, fpath, ext)
         
         if ast_chunks:
@@ -231,7 +233,7 @@ def load_and_chunk_codebase(
             continue
 
         # Fallback to legacy splitter if AST returns nothing
-        splitter = _get_splitter(ext, chunk_size_override=CODE_CHUNK_SIZE)
+        splitter = get_text_splitter(ext, chunk_size_override=CODE_CHUNK_SIZE)
         chunks = splitter.split_documents(raw_docs)
 
         # Enrich metadata for citation and cache-stable sorting

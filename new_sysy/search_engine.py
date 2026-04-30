@@ -74,6 +74,95 @@ def _analyze_query_intent(query: str):
         "is_aggregation": is_aggregation_query
     }
 
+def _rewrite_query(query: str, history: list | None, intent: str) -> str:
+    """Phase 0: Query Rewriting (Contextual Awareness)."""
+    from llm_factory import get_llm
+    from config import OLLAMA_PREFIX, AGENT_ROUTER_MODEL
+    from langchain_core.messages import HumanMessage
+
+    if not history or intent != "FOLLOW-UP":
+        return query
+
+    try:
+        history_text = "\n".join([
+            f"{'User' if isinstance(m, HumanMessage) else 'Assistant'}: {m.content}"
+            for m in history[-2:]
+        ])
+        def _do_rewrite():
+            llm_rewrite = get_llm(model=f"{OLLAMA_PREFIX}{AGENT_ROUTER_MODEL}", temperature=0.0, streaming=False)
+            llm_rewrite = llm_rewrite.with_config({"timeout": 2.0})
+            prompt_rewrite = (
+                f"History:\n{history_text}\n\n"
+                f"Rewrite this query to be standalone: '{query}'\n"
+                "Return ONLY the rewritten query, no explanation."
+            )
+            raw = llm_rewrite.invoke(prompt_rewrite).content.strip()
+            for prefix in ("Sure,", "Here's", "The rewritten query is:", "Rewritten query:"):
+                if raw.lower().startswith(prefix.lower()):
+                    raw = raw[len(prefix):].strip()
+            return raw
+
+        search_query = _rewrite_executor.submit(_do_rewrite).result(timeout=2.2)
+        logger.info(f"🔄 Query Rewritten: '{query}' -> '{search_query}'")
+        return search_query
+    except Exception as e:
+        logger.warning(f"Query rewrite failed or timed out: {e}")
+        return query
+
+def _apply_retrieval_fixes(
+    new_retrievals: list,
+    db: Chroma,
+    search_query: str,
+    collection_name: str,
+    anchors: list,
+    exclude_file: str | None,
+    filter_extensions: list | None
+) -> None:
+    """Phase 2: Advanced Retrieval Fixes (B, D, E, G, J)"""
+    with SQLiteFTS5BM25(collection_name) as fts:
+        top_anchors = anchors[:3]
+
+        # Fix E: Call-graph retrieval
+        try:
+            call_docs = fts.search_by_calls_batch(top_anchors, k=15)
+            if call_docs:
+                logger.info(f"📍 Fix E: Injected {len(call_docs)} chunks calling {top_anchors}")
+                new_retrievals.extend(call_docs)
+        except Exception as e:
+            logger.warning(f"Fix E FTS5 batch call retrieval failed: {e}")
+
+        # Fix G: Constant-reference retrieval
+        try:
+            const_docs = fts.search_by_constants_batch(top_anchors, k=15)
+            if const_docs:
+                logger.info(f"📍 Fix G: Injected {len(const_docs)} chunks referencing constants {top_anchors}")
+                new_retrievals.extend(const_docs)
+        except Exception as e:
+            logger.warning(f"Fix G FTS5 batch constant retrieval failed: {e}")
+
+    # Fix J: Guaranteed anchor text retrieval via ChromaDB $or
+    try:
+        if len(top_anchors) > 1:
+            where_doc = {"$or": [{"$contains": a} for a in top_anchors]}
+        else:
+            where_doc = {"$contains": top_anchors[0]}
+        text_docs = db.similarity_search(search_query, k=10, where_document=where_doc)
+        if text_docs:
+            logger.info(f"📍 Fix J: Injected {len(text_docs)} chunks containing {top_anchors}")
+            new_retrievals.extend(text_docs)
+    except Exception as e:
+        logger.warning(f"Fix J text search failed: {e}")
+
+    # Deep propagation (Fix B)
+    for anchor in anchors[:2]:
+        for sub_q in (f"function that reads {anchor}", f"where {anchor} is used"):
+            try:
+                # Recursive call but without history/intent to avoid infinite loop
+                extra = hybrid_search(db, sub_q, collection_name=collection_name, k=6, exclude_file=exclude_file, filter_extensions=filter_extensions)
+                if extra:
+                    new_retrievals.extend(extra)
+            except Exception: pass
+
 def hybrid_search(
     db: Chroma,
     query: str,
@@ -93,33 +182,8 @@ def hybrid_search(
     from config import OLLAMA_PREFIX, AGENT_ROUTER_MODEL
     from langchain_core.messages import HumanMessage
 
-    search_query = query
-    
     # ── Phase 0: Query Rewriting (Contextual Awareness) ──────────────
-    if history and intent == "FOLLOW-UP":
-        try:
-            history_text = "\n".join([
-                f"{'User' if isinstance(m, HumanMessage) else 'Assistant'}: {m.content}"
-                for m in history[-2:]
-            ])
-            def _do_rewrite():
-                llm_rewrite = get_llm(model=f"{OLLAMA_PREFIX}{AGENT_ROUTER_MODEL}", temperature=0.0, streaming=False)
-                llm_rewrite = llm_rewrite.with_config({"timeout": 2.0})
-                prompt_rewrite = (
-                    f"History:\n{history_text}\n\n"
-                    f"Rewrite this query to be standalone: '{query}'\n"
-                    "Return ONLY the rewritten query, no explanation."
-                )
-                raw = llm_rewrite.invoke(prompt_rewrite).content.strip()
-                for prefix in ("Sure,", "Here's", "The rewritten query is:", "Rewritten query:"):
-                    if raw.lower().startswith(prefix.lower()):
-                        raw = raw[len(prefix):].strip()
-                return raw
-
-            search_query = _rewrite_executor.submit(_do_rewrite).result(timeout=2.2)
-            logger.info(f"🔄 Query Rewritten: '{query}' -> '{search_query}'")
-        except Exception as e:
-            logger.warning(f"Query rewrite failed or timed out: {e}")
+    search_query = _rewrite_query(query, history, intent)
 
     # ── Phase 1: Intent & Anchor Analysis ──────────────────────────
     analysis = _analyze_query_intent(search_query)
@@ -179,49 +243,10 @@ def hybrid_search(
 
     # ── Phase 2: Advanced Retrieval Fixes (B, D, E, G, J) ───────────
     if is_propagation:
-        with SQLiteFTS5BM25(collection_name) as fts:
-            top_anchors = anchors[:3]
-
-            # Fix E: Call-graph retrieval
-            try:
-                call_docs = fts.search_by_calls_batch(top_anchors, k=15)
-                if call_docs:
-                    logger.info(f"📍 Fix E: Injected {len(call_docs)} chunks calling {top_anchors}")
-                    new_retrievals.extend(call_docs)
-            except Exception as e:
-                logger.warning(f"Fix E FTS5 batch call retrieval failed: {e}")
-
-            # Fix G: Constant-reference retrieval
-            try:
-                const_docs = fts.search_by_constants_batch(top_anchors, k=15)
-                if const_docs:
-                    logger.info(f"📍 Fix G: Injected {len(const_docs)} chunks referencing constants {top_anchors}")
-                    new_retrievals.extend(const_docs)
-            except Exception as e:
-                logger.warning(f"Fix G FTS5 batch constant retrieval failed: {e}")
-
-        # Fix J: Guaranteed anchor text retrieval via ChromaDB $or
-        try:
-            if len(top_anchors) > 1:
-                where_doc = {"$or": [{"$contains": a} for a in top_anchors]}
-            else:
-                where_doc = {"$contains": top_anchors[0]}
-            text_docs = db.similarity_search(search_query, k=10, where_document=where_doc)
-            if text_docs:
-                logger.info(f"📍 Fix J: Injected {len(text_docs)} chunks containing {top_anchors}")
-                new_retrievals.extend(text_docs)
-        except Exception as e:
-            logger.warning(f"Fix J text search failed: {e}")
-
-        # Deep propagation (Fix B)
-        for anchor in anchors[:2]:
-            for sub_q in (f"function that reads {anchor}", f"where {anchor} is used"):
-                try:
-                    # Recursive call but without history/intent to avoid infinite loop
-                    extra = hybrid_search(db, sub_q, collection_name=collection_name, k=6, exclude_file=exclude_file, filter_extensions=filter_extensions)
-                    if extra:
-                        new_retrievals.extend(extra)
-                except Exception: pass
+        _apply_retrieval_fixes(
+            new_retrievals, db, search_query, collection_name,
+            anchors, exclude_file, filter_extensions
+        )
 
     # 3. Reciprocal Rank Fusion (RRF)
     RRF_K = 60
@@ -247,7 +272,7 @@ def hybrid_search(
     sorted_ids = sorted(scores.keys(), key=lambda x: scores[x], reverse=True)
     
     # Fix I: Widen top-k for aggregation queries
-    effective_k = k * 2 if is_aggregation_query else k
+    effective_k = k * 2 if is_aggregation else k
     rrf_results = [doc_map[did] for did in sorted_ids[:effective_k]]
 
     return rrf_results

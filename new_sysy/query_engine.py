@@ -1,6 +1,7 @@
 import logging
 import os
 from typing import List, Dict, Any, Optional
+from dataclasses import dataclass, field
 from langchain_core.messages import (
     HumanMessage, 
     AIMessage, 
@@ -65,46 +66,61 @@ class QueryState:
         self.executed_actions: List[str] = [] # Detect repeating loops
         self.is_terminal = False
 
+@dataclass
+class EngineConfig:
+    session_id: str
+    model_id: str
+    temperature: float
+    permission_mode: str
+    delegation_depth: int
+    root_dir: str
+    session_dir: str
+
+@dataclass
+class EngineState:
+    current_plan: str = "No plan defined yet."
+    current_status: str = "Initializing..."
+    permission_callback: Optional[Any] = None
+    hooks: List[Any] = field(default_factory=list)
+
 class QueryEngine:
     """The Deconstructed High-Fidelity Agentic Engine Loop."""
     def __init__(self, session_id: str = "default", model_id: str = DEFAULT_MODEL, temperature: float = LLM_TEMPERATURE, permission_mode: str = "ASK", delegation_depth: int = 0, context_manager=None, permission_manager=None, history_manager=None, dream_engine=None):
-        self.session_id = session_id
-        self.model_id = model_id
-        self.permission_mode = permission_mode
-        self.delegation_depth = delegation_depth
-        self.temperature = temperature
-        self.root_dir = os.getcwd()
+        self.config = EngineConfig(
+            session_id=session_id,
+            model_id=model_id,
+            temperature=temperature,
+            permission_mode=permission_mode,
+            delegation_depth=delegation_depth,
+            root_dir=os.getcwd(),
+            session_dir=SESSION_DIR
+        )
+        self.state = EngineState()
 
         # Build extra headers for prompt caching if enabled
         self.extra_headers = {}
         if ENABLE_PROMPT_CACHING:
             self.extra_headers["anthropic-beta"] = ANTHROPIC_CACHE_BETA_HEADER
 
-        self.llm = ModelFactory.create_model(self.model_id, temperature=self.temperature)
+        self.llm = ModelFactory.create_model(self.config.model_id, temperature=self.config.temperature)
         
         # Isolated Strategy Planner
-        self.planner = StrategicPlanner(ModelFactory.create_model(self.model_id, temperature=0.0))
+        self.planner = StrategicPlanner(ModelFactory.create_model(self.config.model_id, temperature=0.0))
         
         # Subordinate Managers
         self.permission_manager = permission_manager or PermissionManager(mode=permission_mode)
         self.context_manager = context_manager or ContextManager()
-        self.context_rules = ContextRules(self.root_dir)
-        self.session_dir = SESSION_DIR
-        self.journal = SessionJournal(self.session_dir)
-        self.history_manager = history_manager or HistoryManager(self.session_dir)
+        self.context_rules = ContextRules(self.config.root_dir)
+        self.journal = SessionJournal(self.config.session_dir)
+        self.history_manager = history_manager or HistoryManager(self.config.session_dir)
         self.usage_tracker = UsageTracker()
-        self.dream_engine = dream_engine or DreamEngine(self.root_dir)
+        self.dream_engine = dream_engine or DreamEngine(self.config.root_dir)
         self.coordinator = Coordinator(self)
         self.dispatcher = ToolDispatcher(self)
-        
-        self.permission_callback = None # Set by CLI/API
-        self.hooks: List[Any] = [] # List[AgentHook]
-        self.current_plan: str = "No plan defined yet."
-        self.current_status: str = "Initializing..."
 
         # Initialize RAG Chain
         from rag_chain import build_rag_chain
-        self.rag_chain = build_rag_chain(None, model=self.model_id)
+        self.rag_chain = build_rag_chain(None, model=self.config.model_id)
 
         # Pre-bind tools
         self.tools_metadata = [
@@ -146,7 +162,7 @@ class QueryEngine:
     def process_query_stream(self, query: str, session_id: str = "default", messages: Optional[List[Any]] = None, max_turns: int = 15):
         """Advanced Agentic Loop (F-01)."""
         if messages is None or len(messages) == 0:
-            sys_content = f"{SYSTEM_PROMPT}\n\n[MASTER_PLAN_SCRATCHPAD]\n{self.current_plan}\n[/MASTER_PLAN_SCRATCHPAD]"
+            sys_content = f"{SYSTEM_PROMPT}\n\n[MASTER_PLAN_SCRATCHPAD]\n{self.state.current_plan}\n[/MASTER_PLAN_SCRATCHPAD]"
             messages = [SystemMessage(content=sys_content)]
         
         if query:
@@ -162,7 +178,7 @@ class QueryEngine:
                 state.is_terminal = True
                 break
 
-            state.messages = self._apply_pre_query_grooming(state.messages, self.current_plan)
+            state.messages = self._apply_pre_query_grooming(state.messages, self.state.current_plan)
             history_length_before_tick = len(state.messages)
             
             try:
@@ -181,12 +197,12 @@ class QueryEngine:
                 logger.error(f"Turn failure recovered: {e}")
                 
             state.turn_count += 1
-        self.dream_engine.reflect_and_learn(state.messages, self.model_id)
+        self.dream_engine.reflect_and_learn(state.messages, self.config.model_id)
 
     def _execute_tick(self, state: QueryState, session_id: str):
         """One iteration of the agent's logic engine."""
         messages = normalize_messages(state.messages)
-        safety = ContextEstimator.check_flight_safety(self.model_id, messages)
+        safety = ContextEstimator.check_flight_safety(self.config.model_id, messages)
         if safety["status"] == "CRITICAL":
             yield {"type": "status", "content": f"Context Critical ({safety['usage_pct']}%). Compacting..."}
             state.messages = self.context_manager.compact(state.messages)
@@ -233,7 +249,7 @@ class QueryEngine:
             except Exception as e:
                 if "context_length_exceeded" in str(e).lower() and not state.has_attempted_reactive_compact:
                     yield {"type": "status", "content": "Context Overloaded. Attempting Recovery..."}
-                    state.messages = self.context_manager.compact(state.messages, plan=self.current_plan)
+                    state.messages = self.context_manager.compact(state.messages, plan=self.state.current_plan)
                     state.has_attempted_reactive_compact = True
                     state.turn_count -= 1
                     return
@@ -253,7 +269,7 @@ class QueryEngine:
                 
                 if hasattr(full_response, "usage_metadata") and full_response.usage_metadata:
                     u = full_response.usage_metadata
-                    self.usage_tracker.track(self.model_id, {
+                    self.usage_tracker.track(self.config.model_id, {
                         "input_tokens": u.get("input_tokens", 0),
                         "output_tokens": u.get("output_tokens", 0),
                         "cache_read_input_tokens": u.get("cache_read_input_tokens", 0),
@@ -269,7 +285,7 @@ class QueryEngine:
         if action == "final":
             final_prompt = """You are finishing the task. Provide a clear final answer and summarize any changes."""
             response = self.llm.invoke(messages + [SystemMessage(content=final_prompt)])
-            for hook in self.hooks: hook.on_turn_end(response.content)
+            for hook in self.state.hooks: hook.on_turn_end(response.content)
             state.is_terminal = True
             yield {"type": "chunk", "content": response.content}
             yield {"type": "done", "messages": messages}
