@@ -1,0 +1,25 @@
+# Core LangChain & LLM Integration
+langchain-core
+langchain-community
+langchain-openai
+langchain-chroma
+langchain-huggingface
+langchain-text-splitters
+
+# Vector Database & Embeddings
+chromadb
+sentence-transformers
+
+# Web Tools & Networking
+beautifulsoup4
+trafilatura
+httpx
+requests
+
+# CLI & UI
+prompt_toolkit
+rich
+
+# Data & Configuration
+pydantic
+python-dotenv
