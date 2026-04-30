@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = """You are an autonomous AI software engineer operating on a Windows (win32) system. You have access to a set of tools to research, read, and edit code, as well as execute shell commands.
 
 Your workflow:
-1. Research: Use 'code_search' to find relevant code snippets.
+1. Research: Use 'list_directory' to see available files or 'code_search' to find relevant code snippets.
 2. Analyze: Use 'file_read' to examine the full content of relevant files.
 3. Act: Use 'file_write' to create new files or 'file_edit' to make surgical changes.
 4. Verify: Use 'bash' to run tests/commands.

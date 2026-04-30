@@ -94,6 +94,7 @@ def build_available_tools() -> Dict[str, Any]:
         "bash",
         "glob",
         "code_search",
+        "list_directory",
     }
     core_partition = sorted([k for k in _UNSORTED_TOOLS if k in CORE_TOOL_NAMES])
     plugin_partition = sorted([k for k in _UNSORTED_TOOLS if k not in CORE_TOOL_NAMES])

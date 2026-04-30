@@ -68,6 +68,12 @@ class GlobInput(BaseModel):
     )
 
 
+class ListDirectoryInput(BaseModel):
+    directory: str = Field(
+        default=".", description="The relative or absolute path to the directory to list."
+    )
+
+
 class SymbolSearchInput(BaseModel):
     symbol: str = Field(
         description="The name of the class, function, or variable to find the definition of."
@@ -223,6 +229,42 @@ def glob_tool(pattern: str) -> str:
         return "Found files:\n" + "\n".join(safe_matches)
     except OSError as e:
         return f"Error executing glob: {str(e)}"
+
+
+@register_tool(
+    name="list_directory",
+    description="List the contents of a directory. Returns a list of files and subdirectories.",
+    input_schema=ListDirectoryInput,
+    is_read_only=True,
+)
+def list_directory(directory: str = ".") -> str:
+    """List the contents of a directory."""
+    try:
+        # Resolve and validate path
+        abs_path = _validate_path(directory)
+    except PermissionError as e:
+        return str(e)
+
+    if not os.path.isdir(abs_path):
+        return f"Error: '{directory}' is not a directory or does not exist."
+
+    try:
+        entries = os.listdir(abs_path)
+        if not entries:
+            return f"Directory '{directory}' is empty."
+
+        result = []
+        for entry in sorted(entries):
+            entry_path = os.path.join(abs_path, entry)
+            if os.path.isdir(entry_path):
+                result.append(f"[DIR] {entry}")
+            else:
+                size = os.path.getsize(entry_path)
+                result.append(f"{entry} ({size} bytes)")
+
+        return f"Directory listing for {directory}:\n" + "\n".join(result)
+    except OSError as e:
+        return f"Error listing directory: {str(e)}"
 
 
 @register_tool(
