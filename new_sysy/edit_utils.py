@@ -37,14 +37,14 @@ class FuzzyMatcher:
         if search in content:
             return search
 
-        # 2. Normalized try (Quotes + Whitespace)
-        n_content = cls.normalize_quotes(cls.strip_trailing_whitespace(content))
-        n_search = cls.normalize_quotes(cls.strip_trailing_whitespace(search))
-
-        index = n_content.find(n_search)
-        if index != -1:
-            # Success! Extract the ORIGINAL content segment to return
-            # (Matches utils.ts:89 logic)
-            return content[index : index + len(search)]
+        # 2. Regex-based approximation (Whitespace handling)
+        import re
+        parts = re.split(r'\s+', search)
+        escaped_parts = [re.escape(p) for p in parts]
+        regex_pattern = r'\s+'.join(escaped_parts)
+        
+        match = re.search(regex_pattern, content)
+        if match:
+            return match.group(0)
 
         return None

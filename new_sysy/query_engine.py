@@ -197,7 +197,10 @@ class QueryEngine:
     ):
         """Advanced Agentic Loop (F-01)."""
         if messages is None or len(messages) == 0:
-            sys_content = f"{SYSTEM_PROMPT}\n\n[MASTER_PLAN_SCRATCHPAD]\n{self.state.current_plan}\n[/MASTER_PLAN_SCRATCHPAD]"
+            import sys
+            os_name = "Windows" if sys.platform == "win32" else "Linux/Unix"
+            dynamic_prompt = SYSTEM_PROMPT.replace("Windows (win32)", os_name)
+            sys_content = f"{dynamic_prompt}\n\n[MASTER_PLAN_SCRATCHPAD]\n{self.state.current_plan}\n[/MASTER_PLAN_SCRATCHPAD]"
             messages = [SystemMessage(content=sys_content)]
 
         if query:

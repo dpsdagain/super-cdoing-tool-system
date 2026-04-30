@@ -22,13 +22,20 @@ class ToolDispatcher:
 
         tool_info = AVAILABLE_TOOLS[name]
         try:
-            # Phase 6: Dependency Injection
+            # Phase 6: Dependency Injection & Validation Fix
+            engine_inst = None
             if tool_info.get("requires_engine", False):
-                args["_engine_instance"] = self.engine
+                engine_inst = self.engine
 
-            # Validate args against pydantic schema
+            # Validate clean args against pydantic schema
             validated_args = tool_info["input_schema"](**args)
-            result = tool_info["func"](**validated_args.model_dump())
+            call_args = validated_args.model_dump()
+            
+            # Re-inject the engine instance after validation
+            if engine_inst:
+                call_args["_engine_instance"] = engine_inst
+
+            result = tool_info["func"](**call_args)
 
             # Handle Synthetic State Interception
             if isinstance(result, str):

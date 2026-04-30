@@ -67,6 +67,7 @@ class Coordinator:
             main_model=self.manager_engine.config.model_id,
             permission_mode=self.manager_engine.permission_manager.mode,
         )
+        worker.engine.state.permission_callback = self.manager_engine.state.permission_callback
 
         # Hydrate the worker with relevant context from the manager
         full_task = f"ROLE: Assistant Worker. CONTEXT: {context_summary}\nTASK: {task}"

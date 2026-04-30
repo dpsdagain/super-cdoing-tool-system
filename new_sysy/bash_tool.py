@@ -32,7 +32,7 @@ def cleanup_active_processes():
                 if os.name == "nt":
                     os.kill(pid, signal.CTRL_BREAK_EVENT)
                 else:
-                    os.killpg(os.getpgid(pid), signal.SIGTERM)
+                    os.killpg(pid, signal.SIGTERM)
             except Exception:
                 pass
         _active_process_groups.clear()
@@ -102,6 +102,7 @@ def bash_tool(command: str) -> str:
             encoding="utf-8",
             errors="replace",
             creationflags=creationflags,
+            start_new_session=(os.name != "nt"),
         )
 
         with _process_lock:
@@ -141,7 +142,7 @@ def bash_tool(command: str) -> str:
                 if os.name == "nt":
                     os.kill(process.pid, signal.CTRL_BREAK_EVENT)
                 else:
-                    process.terminate()
+                    os.killpg(process.pid, signal.SIGTERM)
                 return (
                     "".join(full_output)
                     + f"\n\nError: Command timed out after {timeout} seconds."
@@ -163,7 +164,7 @@ def bash_tool(command: str) -> str:
                         if os.name == "nt":
                             os.kill(process.pid, signal.CTRL_BREAK_EVENT)
                         else:
-                            process.terminate()
+                            os.killpg(process.pid, signal.SIGTERM)
                         break
 
         stdout_thread.join(timeout=1)
