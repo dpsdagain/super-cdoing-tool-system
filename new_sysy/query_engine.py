@@ -142,10 +142,21 @@ class QueryEngine:
         self.coordinator = Coordinator(self)
         self.dispatcher = ToolDispatcher(self)
 
-        # Initialize RAG Chain
+        # Initialize RAG Chain only when an indexed collection is available.
+        from backend import load_existing_chroma
         from rag_chain import build_rag_chain
 
-        self.rag_chain = build_rag_chain(None, model=self.config.model_id)
+        try:
+            self.rag_db = load_existing_chroma("default")
+            self.rag_chain = (
+                build_rag_chain(self.rag_db, model=self.config.model_id)
+                if self.rag_db
+                else None
+            )
+        except Exception:
+            logger.exception("RAG initialization failed:")
+            self.rag_db = None
+            self.rag_chain = None
 
         # Pre-bind tools
         self.tools_metadata = [
@@ -283,6 +294,18 @@ class QueryEngine:
                 "type": "status",
                 "content": f"RAG: Exploring knowledge for '{action_input}'...",
             }
+            if self.rag_chain is None:
+                yield {
+                    "type": "status",
+                    "content": "RAG unavailable: collection 'default' is empty or missing.",
+                }
+                action = "tool"
+                state.messages.append(
+                    SystemMessage(
+                        content="[RAG_UNAVAILABLE] Collection 'default' is empty or missing. Use file/list/search tools instead."
+                    )
+                )
+                return
             try:
                 rag_result = ""
                 for event in self.rag_chain.stream(
@@ -385,12 +408,14 @@ class QueryEngine:
 
         if action == "final":
             final_prompt = """You are finishing the task. Provide a clear final answer and summarize any changes."""
-            response = self.llm.invoke(messages + [SystemMessage(content=final_prompt)])
+            response = self.llm.invoke(
+                state.messages + [SystemMessage(content=final_prompt)]
+            )
             for hook in self.state.hooks:
                 hook.on_turn_end(response.content)
             state.is_terminal = True
             yield {"type": "chunk", "content": response.content}
-            yield {"type": "done", "messages": messages}
+            yield {"type": "done", "messages": state.messages}
             return
 
         yield {"type": "error", "content": f"Safety limit reached."}

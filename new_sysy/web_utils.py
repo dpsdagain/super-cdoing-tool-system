@@ -95,6 +95,8 @@ class WebFetchInput(BaseModel):
 )
 def read_url(url: str, prompt: Optional[str] = None) -> str:
     """Fetch and distill content from a URL. Best for reading documentation websites."""
+    if not is_safe_url(url):
+        return "Error: Access to local or private network addresses is restricted."
     results = WebFetcher.fetch_markdown(url, prompt)
     if "error" in results:
         return f"Error fetching URL: {results['error']}"

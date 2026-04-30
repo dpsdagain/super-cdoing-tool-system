@@ -52,6 +52,25 @@ class PermissionManager:
         ]
         # Forbidden path components (folders or files)
         self.forbidden_patterns = FORBIDDEN_PATTERNS
+        self.auto_approved_read_tools = {
+            "code_search",
+            "file_read",
+            "glob",
+            "list_directory",
+            "symbol_search",
+            "git_status",
+            "git_diff",
+            "git_root",
+            "git_log",
+            "web_search",
+            "web_fetch",
+            "read_url",
+            "cost_report",
+            "system_doctor",
+            "linter_tool",
+            "arch_visualizer",
+            "undercover_mode",
+        }
 
     def check_permission(
         self, tool_name: str, tool_args: Dict[str, Any], current_depth: int = 0
@@ -141,10 +160,10 @@ class PermissionManager:
             if any(command.startswith(cmd) for cmd in self.safe_bash_commands):
                 return PermissionDecision(behavior="allow")
 
-        if tool_name in ["code_search", "file_read", "file_write"]:
+        if tool_name in self.auto_approved_read_tools:
             return PermissionDecision(
                 behavior="allow"
-            )  # Auto-approved ONLY IF validate_path passed
+            )  # Auto-approved ONLY IF validate_path passed for path-bearing tools
 
         return PermissionDecision(
             behavior="ask", reason=f"Tool '{tool_name}' requires user approval."
