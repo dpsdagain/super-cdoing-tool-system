@@ -1,7 +1,8 @@
+# pylint: disable=too-many-branches,too-many-return-statements
 import re
 import shlex
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -22,26 +23,121 @@ COMMAND_SUBSTITUTION_PATTERNS = [
 ]
 
 ZSH_DANGEROUS_COMMANDS = {
-    'zmodload', 'emulate', 'sysopen', 'sysread', 'syswrite', 'sysseek',
-    'zpty', 'ztcp', 'zsocket', 'mapfile', 'zf_rm', 'zf_mv', 'zf_ln',
-    'zf_chmod', 'zf_chown', 'zf_mkdir', 'zf_rmdir', 'zf_chgrp'
+    "zmodload",
+    "emulate",
+    "sysopen",
+    "sysread",
+    "syswrite",
+    "sysseek",
+    "zpty",
+    "ztcp",
+    "zsocket",
+    "mapfile",
+    "zf_rm",
+    "zf_mv",
+    "zf_ln",
+    "zf_chmod",
+    "zf_chown",
+    "zf_mkdir",
+    "zf_rmdir",
+    "zf_chgrp",
 }
 
 DANGEROUS_COMMANDS = {
-    'rm', 'mkfs', 'dd', 'chmod', 'chown', 'wget', 'curl', 'nc', 'netcat',
-    'socat', 'telnet', 'python', 'python3', 'perl', 'ruby', 'php', 'node',
-    'npm', 'npx', 'yarn', 'sudo', 'su', 'doas', 'docker', 'kubectl',
-    'k8s', 'eval', 'exec', 'source', '.', 'alias', 'unalias', 'bind',
-    'trap', 'kill', 'killall', 'pkill', 'shutdown', 'reboot', 'halt',
-    'poweroff', 'init', 'systemctl', 'service', 'journalctl', 'dmesg',
-    'modprobe', 'insmod', 'rmmod', 'lsmod', 'mount', 'umount', 'chroot',
-    'pivot_root', 'unshare', 'nsenter', 'iptables', 'ufw', 'firewalld',
-    'ufw-default', 'pf', 'pfctl', 'ip', 'ifconfig', 'route', 'netstat',
-    'ss', 'arp', 'iwconfig', 'iw', 'nmcli', 'wpa_cli', 'wpa_supplicant',
-    'airmon-ng', 'airodump-ng', 'aireplay-ng', 'aircrack-ng', 'reaver',
-    'bully', 'pixiewps', 'hashcat', 'john', 'hydra', 'medusa', 'nmap',
-    'masscan', 'zmap', 'rustscan', 'nikto', 'sqlmap', 'sqlping', 'sqlninja'
+    "rm",
+    "mkfs",
+    "dd",
+    "chmod",
+    "chown",
+    "wget",
+    "curl",
+    "nc",
+    "netcat",
+    "socat",
+    "telnet",
+    "python",
+    "python3",
+    "perl",
+    "ruby",
+    "php",
+    "node",
+    "npm",
+    "npx",
+    "yarn",
+    "sudo",
+    "su",
+    "doas",
+    "docker",
+    "kubectl",
+    "k8s",
+    "eval",
+    "exec",
+    "source",
+    ".",
+    "alias",
+    "unalias",
+    "bind",
+    "trap",
+    "kill",
+    "killall",
+    "pkill",
+    "shutdown",
+    "reboot",
+    "halt",
+    "poweroff",
+    "init",
+    "systemctl",
+    "service",
+    "journalctl",
+    "dmesg",
+    "modprobe",
+    "insmod",
+    "rmmod",
+    "lsmod",
+    "mount",
+    "umount",
+    "chroot",
+    "pivot_root",
+    "unshare",
+    "nsenter",
+    "iptables",
+    "ufw",
+    "firewalld",
+    "ufw-default",
+    "pf",
+    "pfctl",
+    "ip",
+    "ifconfig",
+    "route",
+    "netstat",
+    "ss",
+    "arp",
+    "iwconfig",
+    "iw",
+    "nmcli",
+    "wpa_cli",
+    "wpa_supplicant",
+    "airmon-ng",
+    "airodump-ng",
+    "aireplay-ng",
+    "aircrack-ng",
+    "reaver",
+    "bully",
+    "pixiewps",
+    "hashcat",
+    "john",
+    "hydra",
+    "medusa",
+    "nmap",
+    "masscan",
+    "zmap",
+    "rustscan",
+    "nikto",
+    "sqlmap",
+    "sqlping",
+    "sqlninja",
 }
+
 
 class BashSecurityAnalyzer:
     @staticmethod
@@ -57,36 +153,45 @@ class BashSecurityAnalyzer:
         for char in command:
             if escaped:
                 escaped = False
-                if not in_single: with_double_quotes += char
-                if not in_single and not in_double: fully_unquoted += char
-                if not in_single and not in_double: unquoted_keep_chars += char
+                if not in_single:
+                    with_double_quotes += char
+                if not in_single and not in_double:
+                    fully_unquoted += char
+                if not in_single and not in_double:
+                    unquoted_keep_chars += char
                 continue
-                
-            if char == '\\' and not in_single:
+
+            if char == "\\" and not in_single:
                 escaped = True
-                if not in_single: with_double_quotes += char
-                if not in_single and not in_double: fully_unquoted += char
-                if not in_single and not in_double: unquoted_keep_chars += char
+                if not in_single:
+                    with_double_quotes += char
+                if not in_single and not in_double:
+                    fully_unquoted += char
+                if not in_single and not in_double:
+                    unquoted_keep_chars += char
                 continue
-                
+
             if char == "'" and not in_double:
                 in_single = not in_single
                 unquoted_keep_chars += char
                 continue
-                
+
             if char == '"' and not in_single:
                 in_double = not in_double
                 unquoted_keep_chars += char
                 continue
 
-            if not in_single: with_double_quotes += char
-            if not in_single and not in_double: fully_unquoted += char
-            if not in_single and not in_double: unquoted_keep_chars += char
+            if not in_single:
+                with_double_quotes += char
+            if not in_single and not in_double:
+                fully_unquoted += char
+            if not in_single and not in_double:
+                unquoted_keep_chars += char
 
         return {
             "with_double_quotes": with_double_quotes,
             "fully_unquoted": fully_unquoted,
-            "unquoted_keep_chars": unquoted_keep_chars
+            "unquoted_keep_chars": unquoted_keep_chars,
         }
 
     @staticmethod
@@ -99,8 +204,11 @@ class BashSecurityAnalyzer:
             return {"allowed": True, "reason": "Empty command"}
 
         # 1. Base formatting checks
-        if re.search(r"^\s*\t", command) or command.strip().startswith('-'):
-            return {"allowed": False, "reason": "Command fragment (starts with tab or flag)"}
+        if re.search(r"^\s*\t", command) or command.strip().startswith("-"):
+            return {
+                "allowed": False,
+                "reason": "Command fragment (starts with tab or flag)",
+            }
 
         # 2. Extract quotes
         quoted_data = BashSecurityAnalyzer.extract_quoted_content(command)
@@ -109,28 +217,43 @@ class BashSecurityAnalyzer:
         # 3. Check for Dangerous Patterns (Command Substitution)
         for pattern, message in COMMAND_SUBSTITUTION_PATTERNS:
             if re.search(pattern, unquoted):
-                return {"allowed": False, "reason": f"Dangerous pattern detected: {message}"}
+                return {
+                    "allowed": False,
+                    "reason": f"Dangerous pattern detected: {message}",
+                }
 
         # 4. Check for Metacharacters that might break shlex or execute multiple commands
         # Even with shell=False, some commands might evaluate these if passed as args
         if re.search(r"[&|;><`]", unquoted):
-            return {"allowed": False, "reason": "Shell metacharacters (&, |, ;, >, <, `) are not allowed."}
+            return {
+                "allowed": False,
+                "reason": "Shell metacharacters (&, |, ;, >, <, `) are not allowed.",
+            }
 
         # 5. Parse using shlex to get base command and check against Denylists
         try:
             tokens = shlex.split(command)
             if not tokens:
                 return {"allowed": True, "reason": ""}
-            
+
             base_cmd = tokens[0].lower()
-            
+
             if base_cmd in ZSH_DANGEROUS_COMMANDS:
-                return {"allowed": False, "reason": f"Zsh-specific dangerous module execution: {base_cmd}"}
-                
+                return {
+                    "allowed": False,
+                    "reason": f"Zsh-specific dangerous module execution: {base_cmd}",
+                }
+
             if base_cmd in DANGEROUS_COMMANDS:
-                return {"allowed": False, "reason": f"Command restricted by security policy: {base_cmd}"}
-                
+                return {
+                    "allowed": False,
+                    "reason": f"Command restricted by security policy: {base_cmd}",
+                }
+
         except ValueError as e:
-            return {"allowed": False, "reason": f"Malformed command string (unclosed quotes): {e}"}
+            return {
+                "allowed": False,
+                "reason": f"Malformed command string (unclosed quotes): {e}",
+            }
 
         return {"allowed": True, "reason": "Command passed semantic analysis."}

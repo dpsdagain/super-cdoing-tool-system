@@ -1,6 +1,9 @@
 """
 bash_tool.py — Shell Command Execution with Stall Detection.
 """
+
+# pylint: disable=too-many-locals,too-many-return-statements,too-many-branches,too-many-statements
+
 import os
 import subprocess
 import time
@@ -26,7 +29,7 @@ def cleanup_active_processes():
     with _process_lock:
         for pid in _active_process_groups:
             try:
-                if os.name == 'nt':
+                if os.name == "nt":
                     os.kill(pid, signal.CTRL_BREAK_EVENT)
                 else:
                     os.killpg(os.getpgid(pid), signal.SIGTERM)
@@ -52,7 +55,12 @@ STALL_PATTERNS = [
 ]
 
 
-@register_tool(name="bash", description="Execute a shell command. Use this for running tests, build scripts, or git commands.", input_schema=BashInput, is_read_only=False)
+@register_tool(
+    name="bash",
+    description="Execute a shell command. Use this for running tests, build scripts, or git commands.",
+    input_schema=BashInput,
+    is_read_only=False,
+)
 def bash_tool(command: str) -> str:
     """Execute a shell command with real-time stall detection and process-group termination."""
 
@@ -63,7 +71,9 @@ def bash_tool(command: str) -> str:
             return f"Error: Command rejected for security reasons. {security_result['reason']}"
 
         # Path Sentinel: Prevent commands from targeting paths outside the workspace
-        paths = re.findall(r'((?:[a-zA-Z]:\\|[/\\])[\w\s.-]+(?:[/\\][\w\s.-]+)*)', command)
+        paths = re.findall(
+            r"((?:[a-zA-Z]:\\|[/\\])[\w\s.-]+(?:[/\\][\w\s.-]+)*)", command
+        )
         for p in paths:
             try:
                 validate_path(p)
@@ -74,12 +84,12 @@ def bash_tool(command: str) -> str:
 
         # Windows-specific process group creation
         creationflags = 0
-        if os.name == 'nt':
+        if os.name == "nt":
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
 
         try:
             cmd_args = shlex.split(command)
-        except Exception as e:
+        except ValueError as e:
             return f"Error parsing command: {str(e)}"
 
         process = subprocess.Popen(
@@ -89,16 +99,16 @@ def bash_tool(command: str) -> str:
             stderr=subprocess.PIPE,
             bufsize=1,
             universal_newlines=True,
-            encoding='utf-8',
-            errors='replace',
-            creationflags=creationflags
+            encoding="utf-8",
+            errors="replace",
+            creationflags=creationflags,
         )
 
         with _process_lock:
             _active_process_groups.append(process.pid)
 
         output_queue = Queue()
-        
+
         def reader(stream, queue):
             try:
                 while True:
@@ -111,8 +121,12 @@ def bash_tool(command: str) -> str:
             finally:
                 stream.close()
 
-        stdout_thread = threading.Thread(target=reader, args=(process.stdout, output_queue))
-        stderr_thread = threading.Thread(target=reader, args=(process.stderr, output_queue))
+        stdout_thread = threading.Thread(
+            target=reader, args=(process.stdout, output_queue)
+        )
+        stderr_thread = threading.Thread(
+            target=reader, args=(process.stderr, output_queue)
+        )
         stdout_thread.start()
         stderr_thread.start()
 
@@ -124,11 +138,14 @@ def bash_tool(command: str) -> str:
 
         while True:
             if time.time() - start_time > timeout:
-                if os.name == 'nt':
+                if os.name == "nt":
                     os.kill(process.pid, signal.CTRL_BREAK_EVENT)
                 else:
                     process.terminate()
-                return "".join(full_output) + f"\n\nError: Command timed out after {timeout} seconds."
+                return (
+                    "".join(full_output)
+                    + f"\n\nError: Command timed out after {timeout} seconds."
+                )
 
             try:
                 line = output_queue.get(timeout=0.1)
@@ -137,23 +154,23 @@ def bash_tool(command: str) -> str:
             except Empty:
                 if process.poll() is not None:
                     break
-                
+
                 if time.time() - last_output_time > 5.0:
                     current_text = "".join(full_output).strip()
                     tail = current_text[-100:]
                     if any(re.search(p, tail, re.IGNORECASE) for p in STALL_PATTERNS):
                         stall_detected = True
-                        if os.name == 'nt':
+                        if os.name == "nt":
                             os.kill(process.pid, signal.CTRL_BREAK_EVENT)
                         else:
                             process.terminate()
                         break
-            
+
         stdout_thread.join(timeout=1)
         stderr_thread.join(timeout=1)
 
         result = "".join(full_output)
-        
+
         if stall_detected:
             return (
                 f"{result}\n\n"
@@ -168,4 +185,5 @@ def bash_tool(command: str) -> str:
         return result
 
     except Exception as e:
+        logger.exception("Error executing bash command:")
         return f"Error executing command: {str(e)}"

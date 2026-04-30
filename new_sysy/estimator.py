@@ -8,15 +8,16 @@ MODEL_LIMITS = {
     "claude-3-5-sonnet-20241022": 200_000,
     "claude-3-5-haiku-20241022": 200_000,
     "claude-3-opus-20240229": 200_000,
-    "default": 128_000
+    "default": 128_000,
 }
+
 
 class ContextEstimator:
     """
     Advanced Pre-Flight Estimator.
     Predicts context overflows before they reach the API.
     """
-    
+
     @staticmethod
     def estimate_content_tokens(content: Any) -> int:
         """
@@ -51,16 +52,16 @@ class ContextEstimator:
         limit = MODEL_LIMITS.get(model, MODEL_LIMITS["default"])
         estimated = ContextEstimator.estimate_tokens(messages)
         usage_pct = (estimated / limit) * 100
-        
+
         status = "SAFE"
         if usage_pct > 95:
-            status = "CRITICAL" # Must compact
+            status = "CRITICAL"  # Must compact
         elif usage_pct > 85:
-            status = "WARNING" # Warn user
-            
+            status = "WARNING"  # Warn user
+
         return {
             "estimated_tokens": estimated,
             "limit": limit,
             "usage_pct": round(usage_pct, 2),
-            "status": status
+            "status": status,
         }

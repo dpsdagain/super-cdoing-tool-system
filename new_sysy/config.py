@@ -14,8 +14,8 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OLLAMA_CLOUD_API_KEY = os.getenv("OLLAMA_CLOUD_API_KEY", "")
 OLLAMA_CLOUD_BASE_URL = os.getenv("OLLAMA_CLOUD_BASE_URL", "https://api.ollama.com/v1")
 
-GEMINI_MODEL = "google/gemini-2.0-flash-001"
-QWEN_MODEL = "qwen/qwen3.6-plus:free"
+# GEMINI_MODEL = "google/gemini-2.0-flash-001"  # Unused: Reserved for future multi-model orchestration
+# QWEN_MODEL = "qwen/qwen3.6-plus:free"       # Unused: Reserved for fallback scenarios
 
 # CLOUDROUTER MODELS - Verified 2026 Free Tier
 CLOUDROUTER_MODELS = {
@@ -52,7 +52,7 @@ CLOUDROUTER_MODELS = {
     "Ollama Cloud (New)": {
         "Gemma 4 Cloud (31B)": "ollama-cloud:gemma4:31b-cloud",
         "GPT-OSS Cloud (120B)": "ollama-cloud:gpt-oss:120b-cloud",
-    }
+    },
 }
 
 # Default model updated to GPT-OSS Cloud (120B) as requested
@@ -60,11 +60,11 @@ DEFAULT_MODEL = "ollama-cloud:gpt-oss:120b-cloud"
 
 ANTHROPIC_CACHE_BETA_HEADER = "prompt-caching-2024-07-31"
 ENABLE_PROMPT_CACHING = True
-CACHE_THRESHOLD_TOKENS = 1028
+# CACHE_THRESHOLD_TOKENS = 1028 # Unused: Prompt caching logic moved to provider_cache_profiles
 MAX_CACHE_CHECKPOINTS = 4
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODELS = ["llama3.1", "llama3.2:1b", "qwen2.5:3b"]
+# OLLAMA_MODELS = ["llama3.1", "llama3.2:1b", "qwen2.5:3b"] # Unused: Local model list handled by SpecialistMapping
 OLLAMA_PREFIX = "ollama:"
 OLLAMA_CLOUD_PREFIX = "ollama-cloud:"
 AGENT_ROUTER_MODEL = "ollama-cloud:llama4:scout-cloud"
@@ -78,7 +78,7 @@ MAX_TOKENS = 1024
 
 # Dynamically resolve APP_HOME based on this file's location
 APP_HOME = Path(__file__).parent.resolve()
-CHROMA_DB_DIR = str(APP_HOME / "chroma_db") 
+CHROMA_DB_DIR = str(APP_HOME / "chroma_db")
 SESSION_DIR = str(APP_HOME / "sessions")
 TEMP_OUTPUT_DIR = str(APP_HOME / "temp_outputs")
 
@@ -87,7 +87,16 @@ TEMP_OUTPUT_DIR = str(APP_HOME / "temp_outputs")
 WORKSPACE_ROOT = Path(os.getcwd()).resolve()
 
 # Security Policies
-FORBIDDEN_PATTERNS = [".env", ".git", "id_rsa", "id_ed25519", "credentials", ".ssh", ".aws", ".config"]
+FORBIDDEN_PATTERNS = [
+    ".env",
+    ".git",
+    "id_rsa",
+    "id_ed25519",
+    "credentials",
+    ".ssh",
+    ".aws",
+    ".config",
+]
 
 # Ensure global directories exist
 os.makedirs(SESSION_DIR, exist_ok=True)
@@ -98,43 +107,43 @@ EMBEDDING_MODEL_NAME = "BAAI/bge-small-en-v1.5"
 # ═══════════════════════════════════════════════════════════════════════════
 #  CHUNKING CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════
-CHUNK_SIZE = 1500
-CHUNK_OVERLAP = 200
+# CHUNK_SIZE = 1500 # Unused: Using language-specific CODE_CHUNK_SIZE or PDF_CHUNK_SIZE
+# CHUNK_OVERLAP = 200 # Unused: LangChain splitters handle overlap internally or it's not needed for current strategy
 CODE_CHUNK_SIZE = 2000
 PDF_CHUNK_SIZE = 1000
-ZERO_CHUNK_THRESHOLD = 100_000       # Files smaller than this are kept as a single doc
-MAX_ZERO_CHUNK_CHARS = 30_000        # Max chars for zero-chunks in retrieval results
+ZERO_CHUNK_THRESHOLD = 100_000  # Files smaller than this are kept as a single doc
+# MAX_ZERO_CHUNK_CHARS = 30_000 # Unused: ZERO_CHUNK_THRESHOLD is the primary gating metric        # Max chars for zero-chunks in retrieval results
 
 RETRIEVER_K = 12
-RETRIEVER_FETCH_K = 30
+# RETRIEVER_FETCH_K = 30 # Unused: Using RERANK_CANDIDATES as the fetch window instead
 
 SEMANTIC_CACHE_THRESHOLD = 0.98
-PINNED_RELEVANCE_THRESHOLD = 0.40
-STICKY_PINNED_CONTEXT = True
-TRUST_NATIVE_CACHE = True
+# PINNED_RELEVANCE_THRESHOLD = 0.40 # Unused: PINNED content is always included if requested
+# STICKY_PINNED_CONTEXT = True # Unused: Context management logic is now turns-based, not stickiness-based
+# TRUST_NATIVE_CACHE = True # Unused: Native caching handled via ENABLE_PROMPT_CACHING header toggle
 
 GHOST_HISTORY_WINDOW = 10
 GHOST_HISTORY_MAX = 10
 AI_RESPONSE_MAX_CHARS = 800
 GHOST_AI_CHARS = 200
-MAX_HISTORY_TOKENS = 2000
+# MAX_HISTORY_TOKENS = 2000 # Unused: Using SENTINEL_TOKEN_THRESHOLD for summarization trigger
 
 SENTINEL_INTERVAL = 3
-SENTINEL_MAX_TOKENS = 500
+# SENTINEL_MAX_TOKENS = 500 # Unused: Sentinel output is fixed-format bullet points
 SENTINEL_TOKEN_THRESHOLD = 1500
 
 PROVIDER_CACHE_PROFILES = {
-    "claude":    (4, 1024),
-    "gemini":    (8, 1028),
-    "gemma":     (8, 1028),
-    "deepseek":  (4, 1024),
-    "qwen":      (4, 1024),
-    "nemotron":  (4, 1024),
-    "glm":       (4, 1024),
-    "gpt-5":     (4, 1024),
-    "reka":      (4, 1024),
-    "mistral":   (4, 1024),
-    "gpt-oss":   (4, 1024),
+    "claude": (4, 1024),
+    "gemini": (8, 1028),
+    "gemma": (8, 1028),
+    "deepseek": (4, 1024),
+    "qwen": (4, 1024),
+    "nemotron": (4, 1024),
+    "glm": (4, 1024),
+    "gpt-5": (4, 1024),
+    "reka": (4, 1024),
+    "mistral": (4, 1024),
+    "gpt-oss": (4, 1024),
 }
 
 USE_RERANKER = True
@@ -147,12 +156,66 @@ SPECIALIST_MAPPING = {
     "CODE": "ollama-cloud:gpt-oss:120b-cloud",
     "REASONING": "ollama-cloud:gpt-oss:120b-cloud",
     "VISION": "google/gemini-2.0-flash-001",
-    "GENERAL": "ollama-cloud:gpt-oss:120b-cloud"
+    "GENERAL": "ollama-cloud:gpt-oss:120b-cloud",
 }
 
 ENABLE_HYBRID_SEARCH = True
 BM25_WEIGHT = 0.65
 VECTOR_WEIGHT = 0.35
 
-CODE_EXTENSIONS = [".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".cpp", ".c", ".h", ".go", ".rs", ".cs", ".v", ".sv", ".vue", ".svelte", ".html", ".css", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini", ".sh", ".bash", ".bat", ".ps1", ".sql"]
-EXCLUDED_FILE_PATTERNS = ["*-lock.json", "*.lock", "*.csv", "*.log", "*.min.js", "*.min.css", "*.map", "*.svg", "*.png", "*.jpg", "*.jpeg", "*.gif", "*.ico", "*.webp", "*node_modules*", "*venv*", "*__pycache__*", "*.pyc", "*chroma_db*", "*.env", "*archive*"]
+CODE_EXTENSIONS = [
+    ".py",
+    ".js",
+    ".ts",
+    ".jsx",
+    ".tsx",
+    ".java",
+    ".cpp",
+    ".c",
+    ".h",
+    ".go",
+    ".rs",
+    ".cs",
+    ".v",
+    ".sv",
+    ".vue",
+    ".svelte",
+    ".html",
+    ".css",
+    ".md",
+    ".txt",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".cfg",
+    ".ini",
+    ".sh",
+    ".bash",
+    ".bat",
+    ".ps1",
+    ".sql",
+]
+EXCLUDED_FILE_PATTERNS = [
+    "*-lock.json",
+    "*.lock",
+    "*.csv",
+    "*.log",
+    "*.min.js",
+    "*.min.css",
+    "*.map",
+    "*.svg",
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.gif",
+    "*.ico",
+    "*.webp",
+    "*node_modules*",
+    "*venv*",
+    "*__pycache__*",
+    "*.pyc",
+    "*chroma_db*",
+    "*.env",
+    "*archive*",
+]

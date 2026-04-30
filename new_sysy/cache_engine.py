@@ -2,6 +2,9 @@
 cache_engine.py — Semantic Cache using ChromaDB.
 Bypasses RAG + LLM for repeat queries with high similarity.
 """
+
+# pylint: disable=too-many-arguments
+
 from __future__ import annotations
 import hashlib
 import threading
@@ -16,9 +19,11 @@ class SemanticCache:
     Persistent Query/Response cache using ChromaDB.
     Bypasses RAG and LLM for repeat queries.
     """
+
     def __init__(self, collection_name: str = "semantic_cache"):
         from backend import get_embedding_model
         from config import CHROMA_DB_DIR
+
         self.db = Chroma(
             persist_directory=CHROMA_DB_DIR,
             embedding_function=get_embedding_model(),
@@ -37,7 +42,9 @@ class SemanticCache:
         """
         if not pinned_content:
             return "_none_"
-        return hashlib.md5(pinned_content.encode("utf-8", errors="ignore")).hexdigest()[:16]
+        return hashlib.md5(pinned_content.encode("utf-8", errors="ignore")).hexdigest()[
+            :16
+        ]
 
     @staticmethod
     def _model_fingerprint(model: str | None) -> str:
@@ -46,10 +53,14 @@ class SemanticCache:
         """
         return (model or "_default_").strip().lower()
 
-    def lookup(self, query: str, threshold: float = 0.95,
-               collection_scope: str | None = None,
-               pinned_content: str | None = None,
-               model: str | None = None) -> str | None:
+    def lookup(
+        self,
+        query: str,
+        threshold: float = 0.95,
+        collection_scope: str | None = None,
+        pinned_content: str | None = None,
+        model: str | None = None,
+    ) -> str | None:
         """Find a cached answer if similarity exceeds threshold.
 
         Scope dimensions (all enforced):
@@ -80,8 +91,14 @@ class SemanticCache:
             return md.get("answer")
         return None
 
-    def upsert(self, query: str, answer: str, collection_scope: str | None = None,
-               pinned_content: str | None = None, model: str | None = None):
+    def upsert(
+        self,
+        query: str,
+        answer: str,
+        collection_scope: str | None = None,
+        pinned_content: str | None = None,
+        model: str | None = None,
+    ):
         """Save successful generation to cache, tagged with the full scope."""
         meta = {
             "answer": answer,
@@ -91,23 +108,16 @@ class SemanticCache:
         }
         if collection_scope:
             meta["source_collection"] = collection_scope
-        self.db.add_texts(
-            texts=[query],
-            metadatas=[meta]
-        )
+        self.db.add_texts(texts=[query], metadatas=[meta])
 
-_semantic_cache_instance = None
+
 _semantic_cache_lock = threading.Lock()
 
-def get_semantic_cache():
-    global _semantic_cache_instance
-    with _semantic_cache_lock:
-        if _semantic_cache_instance is None:
-            _semantic_cache_instance = SemanticCache()
-        return _semantic_cache_instance
 
-def reset_semantic_cache():
-    """Drop the cached SemanticCache singleton so the next call rebuilds it."""
-    global _semantic_cache_instance
-    with _semantic_cache_lock:
-        _semantic_cache_instance = None
+def get_semantic_cache():
+    """Lazily initialize the SemanticCache singleton."""
+    if not hasattr(get_semantic_cache, "instance"):
+        with _semantic_cache_lock:
+            if not hasattr(get_semantic_cache, "instance"):
+                get_semantic_cache.instance = SemanticCache()
+    return get_semantic_cache.instance

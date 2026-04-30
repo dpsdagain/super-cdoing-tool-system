@@ -1,16 +1,16 @@
 """
 misc_tools.py — Miscellaneous Agent Tools.
 switch_model, update_plan, set_status, cost_report, system_doctor,
-notebook_edit, undo_last_edit, linter, memory, arch_visualizer,
-undercover_mode, task_budget, ask_user.
+notebook_edit, linter, memory, arch_visualizer, undercover_mode.
 """
+
+# pylint: disable=too-many-nested-blocks
+
 import os
-import subprocess
 import logging
 import json
 import shlex
 import ast
-from typing import Optional
 from pydantic import BaseModel, Field
 from tool_registry import register_tool, validate_path
 from config import WORKSPACE_ROOT
@@ -25,199 +25,257 @@ logger = logging.getLogger(__name__)
 #  Pydantic Input Schemas
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class SwitchModelInput(BaseModel):
-    model_id: str = Field(..., description="The ID of the model to switch to (e.g., 'ollama-cloud:gpt-oss:120b-cloud').")
+    model_id: str = Field(
+        ...,
+        description="The ID of the model to switch to (e.g., 'ollama-cloud:gpt-oss:120b-cloud').",
+    )
+
 
 class UpdatePlanInput(BaseModel):
-    plan: str = Field(description='The updated step-by-step plan for the current task.')
+    plan: str = Field(description="The updated step-by-step plan for the current task.")
+
 
 class SetStatusInput(BaseModel):
-    status: str = Field(description="Brief status message for the UI (e.g. 'Analyzing index...').")
+    status: str = Field(
+        description="Brief status message for the UI (e.g. 'Analyzing index...')."
+    )
+
 
 class NotebookEditInput(BaseModel):
-    file_path: str = Field(description='Path to the .ipynb file.')
-    cell_id: str = Field(description='UUID or virtual ID (cell-0, cell-1) of the cell.')
-    new_source: str = Field(description='New content for the cell.')
-    edit_mode: str = Field(default='replace', description='replace, insert, or delete.')
-    cell_type: str = Field(default='code', description='code or markdown.')
+    file_path: str = Field(description="Path to the .ipynb file.")
+    cell_id: str = Field(description="UUID or virtual ID (cell-0, cell-1) of the cell.")
+    new_source: str = Field(description="New content for the cell.")
+    edit_mode: str = Field(default="replace", description="replace, insert, or delete.")
+    cell_type: str = Field(default="code", description="code or markdown.")
 
-class AskUserInput(BaseModel):
-    question: str = Field(description='The question to ask the user.')
 
 class ArchVisualizerInput(BaseModel):
-    directory: str = Field(default='.', description='The directory to visualize.')
+    directory: str = Field(default=".", description="The directory to visualize.")
 
-class TaskBudgetInput(BaseModel):
-    max_tokens: int = Field(description='The maximum number of tokens allowed for this task.')
 
 class LinterInput(BaseModel):
-    file_path: str = Field(description='The path to the file to lint.')
+    file_path: str = Field(description="The path to the file to lint.")
+
 
 class MemoryInput(BaseModel):
-    fact: str = Field(description='The fact or preference to save to long-term memory.')
+    fact: str = Field(description="The fact or preference to save to long-term memory.")
+
 
 class UndercoverInput(BaseModel):
-    text: str = Field(description='The text to strip AI identifiers and local paths from.')
+    text: str = Field(
+        description="The text to strip AI identifiers and local paths from."
+    )
 
-class UndoInput(BaseModel):
-    message_id: str = Field(description="The tool_use_id of the turn to revert.")
 
 class CostInput(BaseModel):
     """No arguments needed — generates cost report from session data."""
-    pass
+
 
 class DoctorInput(BaseModel):
     """No arguments needed — runs full system diagnostics."""
-    pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Tool Functions
 # ═══════════════════════════════════════════════════════════════════════════
 
-@register_tool(name="switch_model", description="Switch the active LLM brain. Ideal for scaling intelligence up or down.", input_schema=SwitchModelInput, is_read_only=True)
+
+@register_tool(
+    name="switch_model",
+    description="Switch the active LLM brain. Ideal for scaling intelligence up or down.",
+    input_schema=SwitchModelInput,
+    is_read_only=True,
+)
 def switch_model(model_id: str) -> str:
     """Reboots the agent with a new LLM engine. All conversation context is preserved."""
-    return f'[MODEL_SWITCHED] {model_id}'
+    return f"[MODEL_SWITCHED] {model_id}"
 
-@register_tool(name="update_plan", description="Update the agent's current task plan and strategy.", input_schema=UpdatePlanInput, is_read_only=False)
+
+@register_tool(
+    name="update_plan",
+    description="Update the agent's current task plan and strategy.",
+    input_schema=UpdatePlanInput,
+    is_read_only=False,
+)
 def update_plan(plan: str) -> str:
     """Synthetic Tool: Update your internal master plan."""
-    return f'[PLAN_UPDATED] {plan}'
+    return f"[PLAN_UPDATED] {plan}"
 
-@register_tool(name="set_status", description="Update the agent's current status message (what it is doing right now).", input_schema=SetStatusInput, is_read_only=False)
+
+@register_tool(
+    name="set_status",
+    description="Update the agent's current status message (what it is doing right now).",
+    input_schema=SetStatusInput,
+    is_read_only=False,
+)
 def set_status(status: str) -> str:
     """Sets the current activity status for the TUI."""
-    return f'[STATUS_UPDATED] {status}'
+    return f"[STATUS_UPDATED] {status}"
 
-@register_tool(name="cost_report", description="Show the current session's token usage and USD cost report.", input_schema=CostInput, is_read_only=True, requires_engine=True)
+
+@register_tool(
+    name="cost_report",
+    description="Show the current session's token usage and USD cost report.",
+    input_schema=CostInput,
+    is_read_only=True,
+    requires_engine=True,
+)
 def cost_report(_engine_instance=None) -> str:
     """Generate a high-precision session cost report. Shows token usage and USD cost."""
     try:
         if not _engine_instance or not _engine_instance.usage_tracker:
-            return 'Error: Usage Tracker not initialized.'
+            return "Error: Usage Tracker not initialized."
         return _engine_instance.usage_tracker.get_report()
     except Exception as e:
-        return f'Error generating cost report: {str(e)}'
+        logger.exception("Error generating cost report:")
+        return f"Error generating cost report: {str(e)}"
 
-@register_tool(name="system_doctor", description="Audit system health (binaries, network, workspace toxicity). Run if tools are failing.", input_schema=DoctorInput, is_read_only=True)
+
+@register_tool(
+    name="system_doctor",
+    description="Audit system health (binaries, network, workspace toxicity). Run if tools are failing.",
+    input_schema=DoctorInput,
+    is_read_only=True,
+)
 def system_doctor() -> str:
     """Perform a full environmental diagnostic check. Audits binaries, network, and workspace toxicity."""
     try:
         report = SystemDoctor.audit()
-        return f'--- System Health Report ---\n{json.dumps(report, indent=2)}'
+        return f"--- System Health Report ---\n{json.dumps(report, indent=2)}"
     except Exception as e:
-        return f'Error running diagnostics: {str(e)}'
+        logger.exception("Error running diagnostics:")
+        return f"Error running diagnostics: {str(e)}"
 
-@register_tool(name="notebook_edit", description="Surgically edit, insert, or delete Jupyter Notebook (.ipynb) cells.", input_schema=NotebookEditInput, is_read_only=False)
-def notebook_edit(file_path: str, cell_id: str, new_source: str, edit_mode: str='replace', cell_type: str='code') -> str:
+
+@register_tool(
+    name="notebook_edit",
+    description="Surgically edit, insert, or delete Jupyter Notebook (.ipynb) cells.",
+    input_schema=NotebookEditInput,
+    is_read_only=False,
+)
+def notebook_edit(
+    file_path: str,
+    cell_id: str,
+    new_source: str,
+    edit_mode: str = "replace",
+    cell_type: str = "code",
+) -> str:
     """Surgically edit a Jupyter Notebook cell. Resets execution state on modified cells."""
     try:
         file_path = validate_path(file_path)
-    except Exception as e:
+    except PermissionError as e:
         return str(e)
     return NotebookMutator.edit(file_path, cell_id, new_source, edit_mode, cell_type)
 
-@register_tool(name="undo_last_edit", description="Roll back file changes made in a specific turn. Use the tool_use_id of the turn to revert.", input_schema=UndoInput, is_read_only=False, requires_engine=True)
-def undo_last_edit(message_id: str, _engine_instance=None) -> str:
-    """Roll back file changes made in a specific turn."""
-    try:
-        if not _engine_instance or not _engine_instance.history_manager:
-            return 'Error: History Manager not initialized.'
-        reverted = _engine_instance.history_manager.rollback(message_id)
-        if not reverted:
-            return f'No changes found to undo for turn ID: {message_id}'
-        return f'Successfully reverted changes for {len(reverted)} files. Turn ID: {message_id}'
-    except Exception as e:
-        return f'Error performing undo: {str(e)}'
 
-@register_tool(name="linter_tool", description="Run a basic linter check on a file.", input_schema=LinterInput, is_read_only=True)
+@register_tool(
+    name="linter_tool",
+    description="Run a basic linter check on a file.",
+    input_schema=LinterInput,
+    is_read_only=True,
+)
 def linter_tool(file_path: str) -> str:
     """Run a basic linter check on a file."""
     try:
         file_path = validate_path(file_path)
     except PermissionError as e:
         return str(e)
-    if file_path.endswith('.py'):
+    if file_path.endswith(".py"):
         result = bash_tool(f"flake8 {shlex.quote(file_path)}")
         if "command not found" in result.lower() or "not recognized" in result.lower():
-            return 'Linter (flake8) not installed. Use bash tool to run a specific linter.'
+            return (
+                "Linter (flake8) not installed. Use bash tool to run a specific linter."
+            )
         if not result.strip() or "Command executed successfully" in result:
-            return 'No linting errors found.'
+            return "No linting errors found."
         return result
-    return 'Linter tool currently only supports Python (.py) files natively. Use bash for others.'
+    return "Linter tool currently only supports Python (.py) files natively. Use bash for others."
 
-@register_tool(name="memory_tool", description="Save a memory or preference to a persistent MEMORY.md file.", input_schema=MemoryInput, is_read_only=False)
+
+@register_tool(
+    name="memory_tool",
+    description="Save a memory or preference to a persistent MEMORY.md file.",
+    input_schema=MemoryInput,
+    is_read_only=False,
+)
 def memory_tool(fact: str) -> str:
     """Save a memory or preference to a persistent MEMORY.md file."""
     try:
-        # Phase 7: Use unified file_read/file_write logic if possible, 
+        # Phase 7: Use unified file_read/file_write logic if possible,
         # but for simplicity we'll just ensure it's tracked by QueryEngine
-        memory_path = os.path.join(str(WORKSPACE_ROOT), 'MEMORY.md')
-        
+        memory_path = os.path.join(str(WORKSPACE_ROOT), "MEMORY.md")
+
         # We'll use file_read/file_write internally to trigger checkpoints if we had them as imports,
         # but since they are in file_tools, and file_tools imports this (circular),
         # we'll stick to open() but ensure QueryEngine checkpoints it.
         # Actually, let's just use the canonical way.
-        with open(memory_path, 'a', encoding='utf-8') as f:
-            f.write(f'- {fact}\n')
-        return f'Memory saved successfully to {memory_path}.'
-    except Exception as e:
-        return f'Error saving memory: {str(e)}'
+        with open(memory_path, "a", encoding="utf-8") as f:
+            f.write(f"- {fact}\n")
+        return f"Memory saved successfully to {memory_path}."
+    except OSError as e:
+        return f"Error saving memory: {str(e)}"
 
-@register_tool(name="arch_visualizer", description="Generate a high-level architecture overview in Mermaid format.", input_schema=ArchVisualizerInput, is_read_only=True)
-def arch_visualizer(directory: str='.') -> str:
+
+@register_tool(
+    name="arch_visualizer",
+    description="Generate a high-level architecture overview in Mermaid format.",
+    input_schema=ArchVisualizerInput,
+    is_read_only=True,
+)
+def arch_visualizer(directory: str = ".") -> str:
     """Generate a high-level architecture overview in Mermaid format."""
     try:
         directory = validate_path(directory)
     except PermissionError as e:
         return str(e)
-    mermaid = ['classDiagram']
+    mermaid = ["classDiagram"]
     for root, _, files in os.walk(directory):
-        if any((exc in root for exc in ['__pycache__', 'venv', '.git'])):
+        if any((exc in root for exc in ["__pycache__", "venv", ".git"])):
             continue
         for file in files:
-            if file.endswith('.py'):
+            if file.endswith(".py"):
                 path = os.path.join(root, file)
                 try:
-                    with open(path, 'r', encoding='utf-8') as f:
+                    with open(path, "r", encoding="utf-8") as f:
                         node = ast.parse(f.read())
                     for sub in node.body:
                         if isinstance(sub, ast.ClassDef):
-                            mermaid.append(f'    class {sub.name} {{')
+                            mermaid.append(f"    class {sub.name} {{")
                             for item in sub.body:
                                 if isinstance(item, ast.FunctionDef):
-                                    mermaid.append(f'        +{item.name}()')
-                            mermaid.append('    }')
-                except Exception:
+                                    mermaid.append(f"        +{item.name}()")
+                            mermaid.append("    }")
+                except (OSError, IOError, UnicodeError, SyntaxError):
                     continue
     if len(mermaid) == 1:
-        return 'No classes found to visualize.'
-    return 'Architecture Diagram (Mermaid):\n\n```mermaid\n' + '\n'.join(mermaid) + '\n```'
+        return "No classes found to visualize."
+    return (
+        "Architecture Diagram (Mermaid):\n\n```mermaid\n" + "\n".join(mermaid) + "\n```"
+    )
 
-@register_tool(name="undercover_mode", description="Strip AI identifiers and local paths from text for professional output.", input_schema=UndercoverInput, is_read_only=True)
+
+@register_tool(
+    name="undercover_mode",
+    description="Strip AI identifiers and local paths from text for professional output.",
+    input_schema=UndercoverInput,
+    is_read_only=True,
+)
 def undercover_mode(text: str) -> str:
     """Strip AI identifiers and local paths from text for professional output."""
     import re
-    markers = ['As an AI.*?model,', 'I am Claude', 'Anthropic', 'Assistant', "I don't have feelings"]
+
+    markers = [
+        "As an AI.*?model,",
+        "I am Claude",
+        "Anthropic",
+        "Assistant",
+        "I don't have feelings",
+    ]
     cleaned = text
     for marker in markers:
-        cleaned = re.sub(marker, '', cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub('[a-zA-Z]:\\\\[\\\\\\w\\s.-]+', '[REDACTED_PATH]', cleaned)
-    cleaned = re.sub('/(?:[\\w.-]+/)+[\\w.-]+', '[REDACTED_PATH]', cleaned)
+        cleaned = re.sub(marker, "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub("[a-zA-Z]:\\\\[\\\\\\w\\s.-]+", "[REDACTED_PATH]", cleaned)
+    cleaned = re.sub("/(?:[\\w.-]+/)+[\\w.-]+", "[REDACTED_PATH]", cleaned)
     return cleaned.strip()
-
-@register_tool(name="task_budget", description="Set or check a token budget for the current task.", input_schema=TaskBudgetInput, is_read_only=False)
-def task_budget(max_tokens: int) -> str:
-    """Set or check a token budget for the current task."""
-    try:
-        with open('budget_config.json', 'w') as f:
-            json.dump({'max_tokens': max_tokens}, f)
-        return f'Budget set to {max_tokens} tokens. Agent will now monitor usage against this limit.'
-    except Exception as e:
-        return f'Error setting budget: {str(e)}'
-
-@register_tool(name="ask_user", description="Ask the user a question to clarify requirements or get feedback.", input_schema=AskUserInput, is_read_only=True)
-def ask_user(question: str) -> str:
-    """Pause execution and ask the human user a question."""
-    return f'[INTERRUPT_REQUIRED] The agent needs human input: {question}'

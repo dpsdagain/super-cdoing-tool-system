@@ -2,6 +2,9 @@
 collection_manager.py — ChromaDB Collection Lifecycle Manager.
 Handles loading, deleting, and listing collections.
 """
+
+# pylint: disable=unused-argument
+
 import os
 import logging
 from langchain_chroma import Chroma
@@ -24,7 +27,8 @@ def load_existing_chroma(collection_name: str = "default") -> Chroma | None:
         if collection_name not in available:
             logger.warning("Collection '%s' not found in registry.", collection_name)
             return None
-    except Exception:
+    except Exception as e:
+        logger.debug("Error listing collections during load: %s", e)
         return None
 
     embedding = get_embedding_model()
@@ -34,18 +38,20 @@ def load_existing_chroma(collection_name: str = "default") -> Chroma | None:
             embedding_function=embedding,
             collection_name=collection_name,
         )
-        count = db._collection.count()
-        if count == 0:
+        # Use a limit of 1 to check if any documents exist without fetching all
+        data = db.get(limit=1)
+        if not data.get("ids"):
             return None
         return db
     except Exception as e:
-        logger.error("Failed to load existing collection '%s': %s", collection_name, e)
+        logger.exception("Failed to load existing collection '%s':", collection_name)
         return None
 
 
 def _get_chroma_client():
     """Return a persistent ChromaDB client."""
     import chromadb
+
     return chromadb.PersistentClient(path=CHROMA_DB_DIR)
 
 
@@ -62,7 +68,8 @@ def delete_collection(collection_name: str) -> bool:
     client = _get_chroma_client()
     try:
         client.delete_collection(collection_name)
-    except Exception:
+    except Exception as e:
+        logger.exception("Failed to delete collection '%s':", collection_name)
         return False
     # Also delete the SQLite FTS5 index
     fts_path = os.path.join(CHROMA_DB_DIR, f"{collection_name}_fts5.db")
@@ -70,10 +77,11 @@ def delete_collection(collection_name: str) -> bool:
         try:
             os.remove(fts_path)
         except Exception as e:
-            logger.warning("Could not delete FTS5 index for '%s': %s", collection_name, e)
+            logger.warning(
+                "Could not delete FTS5 index for '%s': %s", collection_name, e
+            )
     return True
 
 
 def invalidate_collection_info_cache(collection_name: str) -> None:
     """Placeholder for cache invalidation (used by other modules)."""
-    pass

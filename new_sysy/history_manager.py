@@ -2,19 +2,19 @@ import os
 import shutil
 import hashlib
 import logging
-from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
+
 
 class HistoryManager:
     """
     Advanced File History & Checkout System.
     Ported from utils/fileHistory.ts.
-    
+
     Maintains a versioned backup of files modified during the session.
     """
-    
+
     def __init__(self, session_dir: str):
         self.history_dir = os.path.join(session_dir, "file_history")
         os.makedirs(self.history_dir, exist_ok=True)
@@ -39,7 +39,7 @@ class HistoryManager:
             self.snapshots[message_id] = {}
 
         if file_path in self.snapshots[message_id]:
-            return # Already tracked for this turn
+            return  # Already tracked for this turn
 
         version = len(self.snapshots) + 1
         backup_name = self._get_backup_name(file_path, version)
@@ -49,8 +49,12 @@ class HistoryManager:
             shutil.copy2(file_path, backup_path)
             self.snapshots[message_id][file_path] = backup_path
             logger.info(f"Checkpoint created for {file_path} (ID: {message_id})")
-        except Exception as e:
-            logger.error(f"Failed to create history checkpoint: {e}")
+        except (OSError, IOError, shutil.Error):
+            logger.exception(
+                "Failed to create history checkpoint for %s (ID: %s):",
+                file_path,
+                message_id,
+            )
 
     def rollback(self, message_id: str) -> List[str]:
         """
@@ -65,7 +69,9 @@ class HistoryManager:
                 shutil.copy2(backup_path, file_path)
                 reverted_files.append(file_path)
                 logger.info(f"Rollback: Restored {file_path}")
-            except Exception as e:
-                logger.error(f"Rollback failed for {file_path}: {e}")
-        
+            except (OSError, IOError, shutil.Error):
+                logger.exception(
+                    "Rollback failed for %s (ID: %s):", file_path, message_id
+                )
+
         return reverted_files

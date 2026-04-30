@@ -1,29 +1,40 @@
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict
 
 logger = logging.getLogger(__name__)
 
 # 💳 Current Model Price Map (Price per 1M tokens)
 # Ported from standard constants
 MODEL_PRICES = {
-    "claude-3-5-sonnet-20241022": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_write": 3.75},
-    "claude-3-5-haiku-20241022": {"input": 0.25, "output": 1.25, "cache_read": 0.03, "cache_write": 0.30},
-    "default": {"input": 1.00, "output": 1.00, "cache_read": 1.00, "cache_write": 1.00}
+    "claude-3-5-sonnet-20241022": {
+        "input": 3.00,
+        "output": 15.00,
+        "cache_read": 0.30,
+        "cache_write": 3.75,
+    },
+    "claude-3-5-haiku-20241022": {
+        "input": 0.25,
+        "output": 1.25,
+        "cache_read": 0.03,
+        "cache_write": 0.30,
+    },
+    "default": {"input": 1.00, "output": 1.00, "cache_read": 1.00, "cache_write": 1.00},
 }
+
 
 class UsageTracker:
     """
     Advanced Token & Cost Auditor.
     Maintains a high-precision session ledger.
     """
-    
+
     def __init__(self):
         self.totals = {
             "input": 0,
             "output": 0,
             "cache_read": 0,
             "cache_write": 0,
-            "cost_usd": 0.0
+            "cost_usd": 0.0,
         }
         self.model_usage = {}
 
@@ -32,18 +43,18 @@ class UsageTracker:
         Updates the ledger with a new turn's usage (cost-tracker.ts:278).
         """
         prices = MODEL_PRICES.get(model, MODEL_PRICES["default"])
-        
+
         in_t = usage.get("input_tokens", 0)
         out_t = usage.get("output_tokens", 0)
         c_read = usage.get("cache_read_input_tokens", 0)
         c_write = usage.get("cache_creation_input_tokens", 0)
-        
+
         # Calculate Cost in USD
         cost = (
-            (in_t * prices["input"]) + 
-            (out_t * prices["output"]) + 
-            (c_read * prices["cache_read"]) + 
-            (c_write * prices["cache_write"])
+            (in_t * prices["input"])
+            + (out_t * prices["output"])
+            + (c_read * prices["cache_read"])
+            + (c_write * prices["cache_write"])
         ) / 1_000_000.0
 
         # Update Session Totals
@@ -56,7 +67,7 @@ class UsageTracker:
         # Update Model-Specific Tally
         if model not in self.model_usage:
             self.model_usage[model] = {"in": 0, "out": 0, "cost": 0.0}
-        
+
         self.model_usage[model]["in"] += in_t
         self.model_usage[model]["out"] += out_t
         self.model_usage[model]["cost"] += cost
@@ -72,10 +83,12 @@ class UsageTracker:
             f"  - Input:             {self.totals['input']:,}",
             f"  - Output:            {self.totals['output']:,}",
             f"  - Cache Savings:     {self.totals['cache_read']:,} read, {self.totals['cache_write']:,} created",
-            "\nBreakdown by Model:"
+            "\nBreakdown by Model:",
         ]
-        
+
         for model, data in self.model_usage.items():
-            report.append(f"  {model[:20]}...: ${data['cost']:.4f} ({data['in']:,} in, {data['out']:,} out)")
-            
+            report.append(
+                f"  {model[:20]}...: ${data['cost']:.4f} ({data['in']:,} in, {data['out']:,} out)"
+            )
+
         return "\n".join(report)

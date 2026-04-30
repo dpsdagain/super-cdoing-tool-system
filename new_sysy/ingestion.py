@@ -1,32 +1,20 @@
+# pylint: disable=too-many-locals,too-many-branches,too-many-statements,too-many-instance-attributes
 from __future__ import annotations
 import fnmatch
 import hashlib
 import logging
 import os
 import tempfile
-import pickle
 import threading
-import sqlite3
-import json
-import ast as _ast
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import BinaryIO, Callable, Any
-import nltk
-from langchain_text_splitters import RecursiveCharacterTextSplitter, Language
+from typing import BinaryIO, Callable
 from langchain_community.document_loaders import (
     PyPDFLoader,
     TextLoader,
 )
 from langchain_core.documents import Document
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
-import tree_sitter_languages
-from tree_sitter import Node
 from config import (
-    EMBEDDING_MODEL_NAME,
-    CHUNK_SIZE,
-    CHUNK_OVERLAP,
     CODE_CHUNK_SIZE,
     PDF_CHUNK_SIZE,
     CHROMA_DB_DIR,
@@ -36,7 +24,7 @@ from config import (
 )
 
 from embeddings import get_embedding_model
-from chunkers import ASTChunker, RegexHDLChunker, get_text_splitter
+from chunkers import ASTChunker, get_text_splitter
 from fts5_engine import SQLiteFTS5BM25
 from collection_manager import load_existing_chroma, invalidate_collection_info_cache
 
@@ -52,6 +40,7 @@ Handles:
   • Persistent storage in ChromaDB
 """
 
+
 def _is_excluded(filepath: str) -> bool:
     """Return True if the file matches any exclusion pattern."""
     name = os.path.basename(filepath)
@@ -60,6 +49,7 @@ def _is_excluded(filepath: str) -> bool:
         if fnmatch.fnmatch(name, pattern) or fnmatch.fnmatch(full, pattern):
             return True
     return False
+
 
 def load_and_chunk_pdf(file_path: str) -> list[Document]:
     """
@@ -85,7 +75,7 @@ def load_and_chunk_pdf(file_path: str) -> list[Document]:
     """
     loader = PyPDFLoader(file_path)
     raw_docs = loader.load()
-    
+
     # ── Zero Chunking (Phase 3 Upgrade) ──────────────────────────────
     total_content = "\n".join([d.page_content for d in raw_docs])
     if len(total_content) < ZERO_CHUNK_THRESHOLD:
@@ -96,19 +86,22 @@ def load_and_chunk_pdf(file_path: str) -> list[Document]:
                 "source": file_path,
                 "zero_chunk": True,
                 "chunk_index": 0,
-                "content_hash": hashlib.sha256(total_content.encode("utf-8")).hexdigest()
-            }
+                "content_hash": hashlib.sha256(
+                    total_content.encode("utf-8")
+                ).hexdigest(),
+            },
         )
         return [merged_doc]
 
     splitter = get_text_splitter(chunk_size_override=PDF_CHUNK_SIZE)
     chunks = splitter.split_documents(raw_docs)
-    
+
     # Enrich metadata for cache-stable sorting
     for i, chunk in enumerate(chunks):
         chunk.metadata["chunk_index"] = i
         chunk.metadata["content_hash"] = _content_hash(chunk)
     return chunks
+
 
 def load_and_chunk_pdf_upload(uploaded_file: BinaryIO, filename: str) -> list[Document]:
     """
@@ -124,6 +117,7 @@ def load_and_chunk_pdf_upload(uploaded_file: BinaryIO, filename: str) -> list[Do
     finally:
         os.unlink(tmp_path)
 
+
 def _collect_code_files(directory: str) -> list[str]:
     """
     Walk *directory* and return absolute paths of code files
@@ -134,9 +128,19 @@ def _collect_code_files(directory: str) -> list[str]:
     for root, dirs, files in os.walk(directory):
         # Prune heavy directories early
         dirs[:] = [
-            d for d in dirs
-            if d not in {"node_modules", "venv", ".venv", "__pycache__",
-                         ".git", "chroma_db", ".tox", ".mypy_cache"}
+            d
+            for d in dirs
+            if d
+            not in {
+                "node_modules",
+                "venv",
+                ".venv",
+                "__pycache__",
+                ".git",
+                "chroma_db",
+                ".tox",
+                ".mypy_cache",
+            }
         ]
         for fname in files:
             fpath = os.path.join(root, fname)
@@ -151,6 +155,7 @@ def _collect_code_files(directory: str) -> list[str]:
             if ext in CODE_EXTENSIONS and not _is_excluded(fpath):
                 paths.append(fpath)
     return paths
+
 
 def load_and_chunk_codebase(
     directory: str,
@@ -213,7 +218,7 @@ def load_and_chunk_codebase(
                     "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
                     "calls_functions": _zc_calls,
                     "references_constants": _zc_consts,
-                }
+                },
             )
             all_chunks.append(chunk)
             continue
@@ -221,7 +226,7 @@ def load_and_chunk_codebase(
         # ── AST-Aware Chunking (New Upgrade) ──────────────────────────────
         ast_chunker = ASTChunker(chunk_size=CODE_CHUNK_SIZE)
         ast_chunks = ast_chunker.chunk_file(content, fpath, ext)
-        
+
         if ast_chunks:
             # Enrich metadata and add to total
             for i, chunk in enumerate(ast_chunks):
@@ -246,10 +251,12 @@ def load_and_chunk_codebase(
 
     return all_chunks
 
+
 def _content_hash(doc: Document) -> str:
     """Return a SHA-256 hex digest of a document's page_content only."""
     content_str = doc.page_content
     return hashlib.sha256(content_str.encode("utf-8")).hexdigest()
+
 
 def ingest_into_chroma(
     documents: list[Document],
@@ -290,7 +297,9 @@ def ingest_into_chroma(
         #             We still must see every hash, but we page in chunks
         #             of PAGE so peak RAM is bounded regardless of
         #             collection size.
-        incoming_sources = {d.metadata.get("source") for d in documents if d.metadata.get("source")}
+        incoming_sources = {
+            d.metadata.get("source") for d in documents if d.metadata.get("source")
+        }
 
         # Phase A: fetch only stale rows via server-side $in filter.
         stale_ids: list[str] = []
@@ -312,13 +321,19 @@ def ingest_into_chroma(
             except Exception as e:
                 # Filter variants differ between Chroma versions; fall back
                 # to a paged scan rather than crash.
-                logger.warning("Chroma where-filter failed (%s); falling back to paged scan.", e)
+                logger.warning(
+                    "Chroma where-filter failed (%s); falling back to paged scan.",
+                    e,
+                    exc_info=True,
+                )
                 stale_ids = []
                 stale_hashes = set()
                 PAGE = 10000
                 offset = 0
                 while True:
-                    batch = existing_db.get(limit=PAGE, offset=offset, include=["metadatas"])
+                    batch = existing_db.get(
+                        limit=PAGE, offset=offset, include=["metadatas"]
+                    )
                     ids = batch.get("ids", []) or []
                     metas = batch.get("metadatas", []) or []
                     if not ids:
@@ -335,15 +350,16 @@ def ingest_into_chroma(
         if stale_ids:
             # Use the public delete() wrapper (avoids reaching into
             # ._collection, which is version-fragile).
-            try:
-                existing_db.delete(ids=stale_ids)
-            except AttributeError:
-                existing_db._collection.delete(ids=stale_ids)
+            existing_db.delete(ids=stale_ids)
             # Purge matching FTS5 entries so BM25 doesn't return stale content
             if stale_hashes:
                 fts = SQLiteFTS5BM25(collection_name)
                 fts.delete_by_hashes(stale_hashes)
-            logger.info("🗑️ Ingestion: Deleted %d stale chunks from %d re-ingested files.", len(stale_ids), len(incoming_sources))
+            logger.info(
+                "🗑️ Ingestion: Deleted %d stale chunks from %d re-ingested files.",
+                len(stale_ids),
+                len(incoming_sources),
+            )
 
         # Phase B: paged scan to collect existing (non-stale) hashes for dedup.
         # Bounded peak RAM by PAGE rows regardless of collection size.
@@ -369,14 +385,23 @@ def ingest_into_chroma(
                 break
             offset += PAGE
 
-        new_docs = [d for d in documents if d.metadata["content_hash"] not in existing_hashes]
+        new_docs = [
+            d for d in documents if d.metadata["content_hash"] not in existing_hashes
+        ]
         if not new_docs:
-            logger.info("Ingestion: All %d chunks are already in the database. 100%% De-duplicated.", len(documents))
+            logger.info(
+                "Ingestion: All %d chunks are already in the database. 100%% De-duplicated.",
+                len(documents),
+            )
             return existing_db, 0
 
         skipped = len(documents) - len(new_docs)
         if skipped > 0:
-            logger.info("Ingestion: Adding %d new chunks. (Skipped %d duplicates)", len(new_docs), skipped)
+            logger.info(
+                "Ingestion: Adding %d new chunks. (Skipped %d duplicates)",
+                len(new_docs),
+                skipped,
+            )
 
         existing_db.add_documents(new_docs)
         # Keep BM25 in sync with ChromaDB — must update here too,
@@ -398,6 +423,7 @@ def ingest_into_chroma(
 
     return db, len(documents)
 
+
 def _update_bm25_index(new_docs: list[Document], collection_name: str):
     """
     Transitioned to SQLite FTS5 for incremental, disk-based indexing.
@@ -405,72 +431,6 @@ def _update_bm25_index(new_docs: list[Document], collection_name: str):
     fts = SQLiteFTS5BM25(collection_name)
     fts.add_documents(new_docs)
 
-class AsyncIngestionTask:
-    """
-    Run ingestion (loading, chunking, and embedding) in a background thread
-    so the Streamlit UI stays responsive.
-    """
-
-    def __init__(self, target_path: str, collection_name: str = "default", is_pdf: bool = False):
-        self.target_path = target_path
-        self.collection_name = collection_name
-        self.is_pdf = is_pdf
-        self.progress: float = 0.0          # 0.0 to 1.0
-        self.status: str = "pending"        # pending | running | done | error
-        self.current_step: str = ""         # "Collecting files...", "Embedding chunks..."
-        self.result: tuple | None = None    # (Chroma, added_count) on success
-        self.error: str = ""
-        self._thread: threading.Thread | None = None
-
-    def start(self):
-        """Launch the ingestion process in a background thread."""
-        self.status = "running"
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def _run(self):
-        try:
-            # 1. Loading Phase
-            self.current_step = f"Loading {'PDF' if self.is_pdf else 'codebase'}..."
-            self.progress = 0.1
-            
-            if self.is_pdf:
-                # Route through load_and_chunk_pdf so zero-chunking,
-                # content_hash, and chunk_index metadata are all set
-                # consistently — same as the sync ingestion path.
-                chunks = load_and_chunk_pdf(self.target_path)
-            else:
-                # Codebase ingestion with file-by-file progress
-                def _update_progress(curr, tot, name):
-                    self.current_step = f"Collecting codebase: {name}"
-                    # Loading phase covers 0.1 to 0.4 progress
-                    self.progress = 0.1 + (curr / tot) * 0.3
-
-                chunks = load_and_chunk_codebase(self.target_path, on_progress=_update_progress)
-
-            if not chunks:
-                self.error = "No relevant content found to ingest."
-                self.status = "error"
-                return
-
-            # 2. Ingestion Phase
-            self.current_step = f"Embedding {len(chunks)} chunks into ChromaDB..."
-            self.progress = 0.5
-            
-            # Note: ChromaDB ingestion is synchronous but embedding happens here
-            db, added = ingest_into_chroma(chunks, self.collection_name)
-            
-            self.progress = 1.0
-            self.current_step = f"Successfully ingested {added} chunks!"
-            self.result = (db, added)
-            self.status = "done"
-        except Exception as e:
-            self.error = f"Ingestion failed: {str(e)}"
-            self.status = "error"
-
-    @property
-    def is_done(self) -> bool:
-        return self.status in ("done", "error")
 
 def summarize_document_for_pin(file_path: str, max_chars: int = 3000) -> str:
     """
@@ -484,7 +444,7 @@ def summarize_document_for_pin(file_path: str, max_chars: int = 3000) -> str:
     try:
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read()
-    except Exception:
+    except (OSError, IOError, UnicodeError):
         return ""
 
     if not content:
@@ -505,9 +465,11 @@ def summarize_document_for_pin(file_path: str, max_chars: int = 3000) -> str:
         summary += para + "\n\n"
     return summary.strip() if summary else content[:max_chars]
 
+
 def _extract_code_signatures(content: str, max_chars: int) -> str:
     """Extract function/class definitions and docstrings from code."""
     import re
+
     lines = content.split("\n")
     signatures = []
     total_len = 0
@@ -515,9 +477,18 @@ def _extract_code_signatures(content: str, max_chars: int) -> str:
     for i, line in enumerate(lines):
         stripped = line.strip()
         # Match common definition patterns
-        if (stripped.startswith(("def ", "class ", "function ", "func ",
-                                 "export ", "public ", "private ", "async def "))
-                or re.match(r"^(const|let|var)\s+\w+\s*=\s*(async\s+)?\(", stripped)):
+        if stripped.startswith(
+            (
+                "def ",
+                "class ",
+                "function ",
+                "func ",
+                "export ",
+                "public ",
+                "private ",
+                "async def ",
+            )
+        ) or re.match(r"^(const|let|var)\s+\w+\s*=\s*(async\s+)?\(", stripped):
             # Include the signature line
             signatures.append(line)
             total_len += len(line)
@@ -534,4 +505,3 @@ def _extract_code_signatures(content: str, max_chars: int) -> str:
         return content[:max_chars]
 
     return "\n".join(signatures)
-

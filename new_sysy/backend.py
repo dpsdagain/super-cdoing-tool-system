@@ -13,5 +13,5 @@ __all__ = [
     "get_embedding_model",
     "SQLiteFTS5BM25",
     "load_existing_chroma",
-    "get_text_splitter"
+    "get_text_splitter",
 ]

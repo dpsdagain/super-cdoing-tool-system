@@ -2,6 +2,7 @@
 fts5_engine.py — On-disk Full Text Search engine using SQLite FTS5.
 Replaces the RAM-heavy rank_bm25 with incremental, disk-based BM25 indexing.
 """
+
 from __future__ import annotations
 import hashlib
 import logging
@@ -32,6 +33,7 @@ class SQLiteFTS5BM25:
     Uses SQLite's FTS5 extension which is built into standard Python.
     Reuses a thread-local connection to avoid open/close overhead and handle concurrency.
     """
+
     def __init__(self, collection_name: str):
         self.db_path = os.path.join(CHROMA_DB_DIR, f"{collection_name}_fts5.db")
         self._lock = _FTS5_GLOBAL_LOCK
@@ -51,11 +53,17 @@ class SQLiteFTS5BM25:
         conn = self._get_conn()
         # Enable FTS5 and create table with indexed symbols (calls + constants)
         try:
-            conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(content, source_name, metadata_json UNINDEXED, calls, constants)")
+            conn.execute(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(content, source_name, metadata_json UNINDEXED, calls, constants)"
+            )
         except sqlite3.OperationalError:
             conn.execute("DROP TABLE IF EXISTS docs_fts")
-            conn.execute("CREATE VIRTUAL TABLE docs_fts USING fts5(content, source_name, metadata_json UNINDEXED, calls, constants)")
-        conn.execute("CREATE TABLE IF NOT EXISTS hashes (content_hash TEXT PRIMARY KEY)")
+            conn.execute(
+                "CREATE VIRTUAL TABLE docs_fts USING fts5(content, source_name, metadata_json UNINDEXED, calls, constants)"
+            )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS hashes (content_hash TEXT PRIMARY KEY)"
+        )
         try:
             conn.execute("ALTER TABLE hashes ADD COLUMN rowid_ref INTEGER")
         except sqlite3.OperationalError:
@@ -69,8 +77,11 @@ class SQLiteFTS5BM25:
             for doc in documents:
                 h = doc.metadata.get("content_hash", _content_hash(doc))
                 # Skip if already indexed
-                res = conn.execute("SELECT 1 FROM hashes WHERE content_hash = ?", (h,)).fetchone()
-                if res: continue
+                res = conn.execute(
+                    "SELECT 1 FROM hashes WHERE content_hash = ?", (h,)
+                ).fetchone()
+                if res:
+                    continue
 
                 meta_json = json.dumps(doc.metadata)
                 source_name = os.path.basename(doc.metadata.get("source", "")).lower()
@@ -78,29 +89,36 @@ class SQLiteFTS5BM25:
                 constants = doc.metadata.get("references_constants", "")
                 cursor = conn.execute(
                     "INSERT INTO docs_fts(content, source_name, metadata_json, calls, constants) VALUES (?, ?, ?, ?, ?)",
-                    (doc.page_content, source_name, meta_json, calls, constants)
+                    (doc.page_content, source_name, meta_json, calls, constants),
                 )
                 rowid = cursor.lastrowid
-                conn.execute("INSERT INTO hashes(content_hash, rowid_ref) VALUES (?, ?)", (h, rowid))
+                conn.execute(
+                    "INSERT INTO hashes(content_hash, rowid_ref) VALUES (?, ?)",
+                    (h, rowid),
+                )
             conn.commit()
-        except Exception:
+        except (sqlite3.Error, json.JSONDecodeError, OSError) as e:
+            logger.exception("FTS5: Failed to add documents")
             conn.rollback()
             raise
 
     def __enter__(self):
         return self
-        
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         # We no longer close the connection here to keep it persistent for the thread
         pass
-        
+
     def close(self):
         """Explicitly close the connection (thread-local cleanup handled manually if needed)."""
-        if hasattr(_sqlite_connections, "conn") and _sqlite_connections.conn is not None:
+        if (
+            hasattr(_sqlite_connections, "conn")
+            and _sqlite_connections.conn is not None
+        ):
             try:
                 _sqlite_connections.conn.close()
                 _sqlite_connections.conn = None
-            except Exception:
+            except sqlite3.Error:
                 pass
 
     def search(self, query: str, k: int = 10) -> list[Document]:
@@ -110,7 +128,9 @@ class SQLiteFTS5BM25:
 
         # Clean query for FTS5 (strip special chars that break FTS5 grammar)
         # Preserve underscores and dots — critical for code identifiers
-        clean_query = "".join(c if c.isalnum() or c.isspace() or c in "_.+#" else " " for c in query)
+        clean_query = "".join(
+            c if c.isalnum() or c.isspace() or c in "_.+#" else " " for c in query
+        )
         clean_query = clean_query.strip()
         if not clean_query:
             return []
@@ -121,7 +141,7 @@ class SQLiteFTS5BM25:
                 # Use BM25 scoring via FTS5 'rank'
                 rows = conn.execute(
                     "SELECT content, metadata_json FROM docs_fts WHERE docs_fts MATCH ? ORDER BY rank LIMIT ?",
-                    (clean_query, k)
+                    (clean_query, k),
                 ).fetchall()
             except sqlite3.OperationalError:
                 # Fallback for empty or invalid queries
@@ -140,7 +160,7 @@ class SQLiteFTS5BM25:
             try:
                 rows = conn.execute(
                     "SELECT content, metadata_json FROM docs_fts WHERE calls MATCH ? LIMIT ?",
-                    (func_name, k)
+                    (func_name, k),
                 ).fetchall()
             except sqlite3.OperationalError:
                 return []
@@ -156,7 +176,7 @@ class SQLiteFTS5BM25:
             try:
                 rows = conn.execute(
                     "SELECT content, metadata_json FROM docs_fts WHERE calls MATCH ? LIMIT ?",
-                    (or_query, k)
+                    (or_query, k),
                 ).fetchall()
             except sqlite3.OperationalError:
                 return []
@@ -171,13 +191,15 @@ class SQLiteFTS5BM25:
             try:
                 rows = conn.execute(
                     "SELECT content, metadata_json FROM docs_fts WHERE constants MATCH ? LIMIT ?",
-                    (const_name, k)
+                    (const_name, k),
                 ).fetchall()
             except sqlite3.OperationalError:
                 return []
         return [Document(page_content=c, metadata=json.loads(m)) for c, m in rows]
 
-    def search_by_constants_batch(self, terms: list[str], k: int = 10) -> list[Document]:
+    def search_by_constants_batch(
+        self, terms: list[str], k: int = 10
+    ) -> list[Document]:
         """Batch query: find chunks referencing ANY of the given constants (FTS5 OR)."""
         if not terms or not os.path.exists(self.db_path):
             return []
@@ -187,7 +209,7 @@ class SQLiteFTS5BM25:
             try:
                 rows = conn.execute(
                     "SELECT content, metadata_json FROM docs_fts WHERE constants MATCH ? LIMIT ?",
-                    (or_query, k)
+                    (or_query, k),
                 ).fetchall()
             except sqlite3.OperationalError:
                 return []
@@ -208,19 +230,28 @@ class SQLiteFTS5BM25:
             hash_list = list(hashes)
             stale_rowids = []
             for i in range(0, len(hash_list), 900):
-                batch = hash_list[i:i+900]
+                batch = hash_list[i : i + 900]
                 placeholders = ",".join("?" * len(batch))
-                cursor = conn.execute(f"SELECT rowid_ref FROM hashes WHERE content_hash IN ({placeholders})", batch)
-                stale_rowids.extend([r[0] for r in cursor.fetchall() if r[0] is not None])
+                cursor = conn.execute(
+                    f"SELECT rowid_ref FROM hashes WHERE content_hash IN ({placeholders})",
+                    batch,
+                )
+                stale_rowids.extend(
+                    [r[0] for r in cursor.fetchall() if r[0] is not None]
+                )
             if stale_rowids:
                 for i in range(0, len(stale_rowids), 900):
-                    batch = stale_rowids[i:i+900]
+                    batch = stale_rowids[i : i + 900]
                     placeholders = ",".join("?" * len(batch))
-                    conn.execute(f"DELETE FROM docs_fts WHERE rowid IN ({placeholders})", batch)
+                    conn.execute(
+                        f"DELETE FROM docs_fts WHERE rowid IN ({placeholders})", batch
+                    )
                 hash_list = list(hashes)
                 for i in range(0, len(hash_list), 900):
-                    batch = hash_list[i:i+900]
+                    batch = hash_list[i : i + 900]
                     hph = ",".join("?" * len(batch))
-                    conn.execute(f"DELETE FROM hashes WHERE content_hash IN ({hph})", batch)
+                    conn.execute(
+                        f"DELETE FROM hashes WHERE content_hash IN ({hph})", batch
+                    )
                 conn.commit()
                 logger.info("FTS5: Deleted %d stale entries.", len(stale_rowids))

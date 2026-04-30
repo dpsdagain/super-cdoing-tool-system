@@ -14,5 +14,5 @@ __all__ = [
     "get_llm",
     "hybrid_search",
     "get_reranker",
-    "build_rag_chain"
+    "build_rag_chain",
 ]

@@ -1,20 +1,18 @@
 import re
 from typing import Optional
 
+
 class FuzzyMatcher:
     """
     Advanced Fuzzy String Matcher.
     Ported from FileEditTool/utils.ts.
-    
-    Ensures file edits succeed even if the LLM makes minor 
+
+    Ensures file edits succeed even if the LLM makes minor
     formatting/typographic errors.
     """
-    
+
     # String Matcher Constants (utils.ts:21-24)
-    CURLY_QUOTES = {
-        '‘': "'", '’': "'",
-        '“': '"', '”': '"'
-    }
+    CURLY_QUOTES = {"‘": "'", "’": "'", "“": '"', "”": '"'}
 
     @staticmethod
     def normalize_quotes(text: str) -> str:
@@ -27,7 +25,7 @@ class FuzzyMatcher:
     def strip_trailing_whitespace(text: str) -> str:
         """Ported from utils.ts:44."""
         lines = text.splitlines(keepends=True)
-        return "".join([re.sub(r'[ \t]+$', '', line) for line in lines])
+        return "".join([re.sub(r"[ \t]+$", "", line) for line in lines])
 
     @classmethod
     def find_actual_string(cls, content: str, search: str) -> Optional[str]:
@@ -48,5 +46,5 @@ class FuzzyMatcher:
             # Success! Extract the ORIGINAL content segment to return
             # (Matches utils.ts:89 logic)
             return content[index : index + len(search)]
-            
+
         return None

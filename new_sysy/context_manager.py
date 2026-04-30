@@ -1,30 +1,41 @@
 import logging
-import subprocess
-from typing import List, Any, Dict, Optional
-from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ToolMessage
-from langchain_openai import ChatOpenAI
+from typing import List, Any, Optional
+from langchain_core.messages import (
+    BaseMessage,
+    SystemMessage,
+    HumanMessage,
+    AIMessage,
+    ToolMessage,
+)
 from result_archive import ResultArchive
-from config import OLLAMA_CLOUD_BASE_URL, OLLAMA_CLOUD_API_KEY as API_KEY
 from estimator import ContextEstimator
 from llm_factory import ModelFactory
-from bash_tool import bash_tool
 
 logger = logging.getLogger(__name__)
+
 
 class ContextManager:
     """
     Advanced 5-Layer Context Architecture.
     Tiered reduction preserves technical precision while bounding token cost.
     """
-    def __init__(self, max_context_tokens: int = 128000, compression_threshold: float = 0.9, summarizer_llm: Optional[Any] = None):
+
+    def __init__(
+        self,
+        max_context_tokens: int = 128000,
+        compression_threshold: float = 0.9,
+        summarizer_llm: Optional[Any] = None,
+    ):
         self.max_context_tokens = max_context_tokens
         self.compression_threshold = compression_threshold
-        self.result_archive = ResultArchive() # Layer 1 Instance
-        
+        self.result_archive = ResultArchive()  # Layer 1 Instance
+
         # Layer 5: Emergency Summarizer (Dependency Injected)
         if summarizer_llm is None:
             # Fallback for backward compatibility
-            self.summarizer_llm = ModelFactory.create_model("ollama-cloud:gemma2:9b-cloud", temperature=0.0)
+            self.summarizer_llm = ModelFactory.create_model(
+                "ollama-cloud:gemma2:9b-cloud", temperature=0.0
+            )
         else:
             self.summarizer_llm = summarizer_llm
 
@@ -44,7 +55,9 @@ class ContextManager:
         if current_tokens < soft_limit:
             return messages
 
-        logger.info(f"Context Pressure ({current_tokens} tokens). Escalating to Tier 3-5.")
+        logger.info(
+            f"Context Pressure ({current_tokens} tokens). Escalating to Tier 3-5."
+        )
 
         # Layer 3: Context Collapse (Archiving Repetitive Loops)
         messages = self._context_collapse(messages)
@@ -59,13 +72,17 @@ class ContextManager:
 
         return messages
 
-    def _apply_tool_result_budget(self, messages: List[BaseMessage]) -> List[BaseMessage]:
+    def _apply_tool_result_budget(
+        self, messages: List[BaseMessage]
+    ) -> List[BaseMessage]:
         """Layer 1: Lossless Budgeting (toolResultStorage.ts:99) - Archive to disk."""
         capped = []
         for msg in messages:
             if isinstance(msg, ToolMessage) and len(str(msg.content)) > 8000:
                 # 🔄 LOSSLESS UPGRADE: Write to disk instead of truncating
-                msg.content = self.result_archive.offload_if_large("tool_result", str(msg.content))
+                msg.content = self.result_archive.offload_if_large(
+                    "tool_result", str(msg.content)
+                )
             capped.append(msg)
         return capped
 
@@ -80,35 +97,53 @@ class ContextManager:
 
     def _context_collapse(self, messages: List[BaseMessage]) -> List[BaseMessage]:
         """Layer 3: Collapse (contextCollapse:18) - Merge repetitive log chains."""
-        if len(messages) < 10: return messages
+        if len(messages) < 10:
+            return messages
         collapsed = [messages[0]]
-        
+
         i = 1
         while i < len(messages):
-            if i + 2 < len(messages) and isinstance(messages[i], AIMessage) and isinstance(messages[i + 1], ToolMessage):
+            if (
+                i + 2 < len(messages)
+                and isinstance(messages[i], AIMessage)
+                and isinstance(messages[i + 1], ToolMessage)
+            ):
                 pattern_count = 0
                 while i + (pattern_count + 1) * 2 < len(messages):
                     curr_ai = messages[i + pattern_count * 2]
                     next_ai = messages[i + (pattern_count + 1) * 2]
-                    if hasattr(curr_ai, 'tool_calls') and curr_ai.tool_calls and \
-                       hasattr(next_ai, 'tool_calls') and next_ai.tool_calls:
-                        if curr_ai.tool_calls[0].get('name') == next_ai.tool_calls[0].get('name'):
+                    if (
+                        hasattr(curr_ai, "tool_calls")
+                        and curr_ai.tool_calls
+                        and hasattr(next_ai, "tool_calls")
+                        and next_ai.tool_calls
+                    ):
+                        if curr_ai.tool_calls[0].get("name") == next_ai.tool_calls[
+                            0
+                        ].get("name"):
                             pattern_count += 1
-                        else: break
-                    else: break
-                
+                        else:
+                            break
+                    else:
+                        break
+
                 if pattern_count > 3:
-                    collapsed.append(AIMessage(content=f"[COLLAPSED_SEQUENCE: {pattern_count} repeated operations]"))
-                    i += (pattern_count * 2)
+                    collapsed.append(
+                        AIMessage(
+                            content=f"[COLLAPSED_SEQUENCE: {pattern_count} repeated operations]"
+                        )
+                    )
+                    i += pattern_count * 2
                     continue
-            
+
             collapsed.append(messages[i])
             i += 1
         return collapsed
 
     def _snip_history(self, messages: List[BaseMessage]) -> List[BaseMessage]:
         """Layer 4: Snipping (snipCompact.ts:115)."""
-        if len(messages) < 12: return messages
+        if len(messages) < 12:
+            return messages
         snipped = [messages[0], messages[1]]
         snipped.append(SystemMessage(content="... [EARLIER MESSAGES SNIPPED] ..."))
         snipped.extend(messages[-6:])
@@ -117,24 +152,27 @@ class ContextManager:
     def _autocompact(self, messages: List[BaseMessage], plan: str) -> List[BaseMessage]:
         """Layer 5: Autocompact with Project State Restoration (context.ts:149)."""
         system_msg = messages[0] if isinstance(messages[0], SystemMessage) else None
-        
+
         # 1. Distill History
         tail = messages[-4:]
         middle = messages[1:-4]
         summary = self._generate_summary(middle)
-        
+
         # 2. Re-inject Project Context (Git + Skills)
         from bash_tool import bash_tool
+
         git_status = bash_tool("git status --short")
-        
+
         discovered_skills = set()
         for m in messages:
-            if hasattr(m, 'tool_calls') and m.tool_calls:
-                for tc in m.tool_calls: discovered_skills.add(tc.get('name'))
+            if hasattr(m, "tool_calls") and m.tool_calls:
+                for tc in m.tool_calls:
+                    discovered_skills.add(tc.get("name"))
 
         final = []
-        if system_msg: final.append(system_msg)
-        
+        if system_msg:
+            final.append(system_msg)
+
         # Re-inject critical state after the summary to reset the model's awareness
         restoration_msg = (
             f"[TECHNICAL_SUMMARY]\n{summary}\n\n"
@@ -160,7 +198,9 @@ class ContextManager:
         )
         history = "\n".join([f"{m.type}: {str(m.content)[:500]}" for m in messages])
         try:
-            res = self.summarizer_llm.invoke([SystemMessage(content=prompt), HumanMessage(content=history)])
+            res = self.summarizer_llm.invoke(
+                [SystemMessage(content=prompt), HumanMessage(content=history)]
+            )
             return res.content
         except Exception:
             return "History summarized."

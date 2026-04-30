@@ -2,24 +2,25 @@ import os
 import json
 import logging
 from typing import List, Any
-from langchain_core.messages import (
-    messages_from_dict,
-    message_to_dict
-)
+from langchain_core.messages import messages_from_dict, message_to_dict
 
 logger = logging.getLogger(__name__)
 
+
 class SessionJournal:
     """Live Journaling: Persist history turns line-by-line for crash resiliency."""
+
     def __init__(self, session_dir: str):
         self.session_dir = session_dir
         os.makedirs(self.session_dir, exist_ok=True)
 
-    def save_session(self, session_id: str, messages: List[Any], append_only: bool = False):
+    def save_session(
+        self, session_id: str, messages: List[Any], append_only: bool = False
+    ):
         """Persist history turns line-by-line for crash resiliency."""
         file_path = os.path.join(self.session_dir, f"{session_id}.jsonl")
         mode = "a" if append_only else "w"
-        
+
         with open(file_path, mode, encoding="utf-8") as f:
             for m in messages:
                 serialized = message_to_dict(m)
@@ -60,6 +61,8 @@ class SessionJournal:
         # Support both .json and .jsonl in listing
         sessions = set()
         for f in os.listdir(self.session_dir):
-            if f.endswith(".json"): sessions.add(f.replace(".json", ""))
-            elif f.endswith(".jsonl"): sessions.add(f.replace(".jsonl", ""))
+            if f.endswith(".json"):
+                sessions.add(f.replace(".json", ""))
+            elif f.endswith(".jsonl"):
+                sessions.add(f.replace(".jsonl", ""))
         return sorted(list(sessions))
