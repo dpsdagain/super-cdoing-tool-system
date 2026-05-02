@@ -8,14 +8,29 @@ Provides code_search, file_read, file_edit, file_write, grep, glob, brief, and s
 import os
 import logging
 import re
-import fnmatch
-import glob
+from pathlib import Path
 from typing import List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AliasChoices
 from config import WORKSPACE_ROOT, RETRIEVER_K, RERANK_TOP_K, USE_RERANKER
 from tool_registry import register_tool, validate_path
 
 logger = logging.getLogger(__name__)
+
+# Directories that are never useful to walk for source-code search.
+# Centralised so glob/symbol_search/future tools share one definition.
+EXCLUDED_DIRS = frozenset(
+    {
+        "__pycache__",
+        "venv",
+        ".venv",
+        ".git",
+        "chroma_db",
+        "node_modules",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".tox",
+    }
+)
 
 
 def _validate_path(path: str) -> str:
@@ -40,7 +55,7 @@ class CodeSearchInput(BaseModel):
 
 
 class FileReadInput(BaseModel):
-    file_path: str = Field(description="The absolute path to the file to read.")
+    file_path: str = Field(validation_alias=AliasChoices('file_path', 'path'), description="The absolute path to the file to read.")
     start_line: Optional[int] = Field(
         default=None, description="The 1-based line number to start reading from."
     )
@@ -50,13 +65,14 @@ class FileReadInput(BaseModel):
 
 
 class FileEditInput(BaseModel):
-    file_path: str = Field(description="The absolute path to the file to edit.")
+    file_path: str = Field(validation_alias=AliasChoices('file_path', 'path'), description="The absolute path to the file to edit.")
     old_string: str = Field(description="The exact literal text to replace.")
     new_string: str = Field(description="The text to replace old_string with.")
 
 
 class FileWriteInput(BaseModel):
     file_path: str = Field(
+        validation_alias=AliasChoices('file_path', 'path'),
         description="The absolute path to the file to create or overwrite."
     )
     content: str = Field(description="The full content to write to the file.")
@@ -126,7 +142,19 @@ def code_search(
 def file_read(
     file_path: str, start_line: Optional[int] = None, end_line: Optional[int] = None
 ) -> str:
-    """Read a file's content, optionally within a line range."""
+    """Read a file's content, optionally within a 1-based, inclusive line range."""
+    # Fail Fast: validate range arguments before doing any I/O.
+    if start_line is not None and start_line < 1:
+        return "Error: start_line must be >= 1."
+    if end_line is not None and end_line < 1:
+        return "Error: end_line must be >= 1."
+    if (
+        start_line is not None
+        and end_line is not None
+        and end_line < start_line
+    ):
+        return "Error: end_line must be >= start_line."
+
     try:
         file_path = _validate_path(file_path)
     except PermissionError as e:
@@ -136,16 +164,18 @@ def file_read(
     try:
         with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
-        if start_line is not None or end_line is not None:
-            start = start_line - 1 if start_line else 0
-            end = end_line if end_line else len(lines)
-            content = "".join(lines[start:end])
-            return (
-                f"--- Content of {file_path} (Lines {start + 1}-{end}) ---\n{content}"
-            )
-        else:
+        if start_line is None and end_line is None:
             content = "".join(lines)
             return f"--- Content of {file_path} ---\n{content}"
+
+        # Convert from 1-based inclusive to Python slice indices, clamped to file length.
+        start_idx = (start_line - 1) if start_line else 0
+        end_idx = end_line if end_line else len(lines)
+        end_idx = min(end_idx, len(lines))
+        content = "".join(lines[start_idx:end_idx])
+        return (
+            f"--- Content of {file_path} (Lines {start_idx + 1}-{end_idx}) ---\n{content}"
+        )
     except (OSError, IOError, UnicodeError) as e:
         return f"Error reading file: {str(e)}"
 
@@ -159,6 +189,15 @@ def file_read(
 def file_edit(file_path: str, old_string: str, new_string: str) -> str:
     """Surgically replace old_string with new_string in a file (F-05 Parity)."""
     from edit_utils import FuzzyMatcher
+
+    # Fail Fast: a no-op edit means the agent is confused about its own state.
+    # Reporting "success" would let it loop indefinitely thinking it changed something.
+    if old_string == new_string:
+        return (
+            "Error: old_string and new_string are identical — nothing to change. "
+            "This usually means the agent has already applied this edit or is "
+            "looking at stale content."
+        )
 
     try:
         file_path = _validate_path(file_path)
@@ -176,6 +215,13 @@ def file_edit(file_path: str, old_string: str, new_string: str) -> str:
         if occurrences > 1:
             return f"Error: Found {occurrences} fuzzy occurrences. Please provide more context."
         new_content = content.replace(actual_old, new_string)
+        if new_content == content:
+            # Defensive: fuzzy match returned a string that, after substitution,
+            # produced no change. Treat as a hard failure so the agent re-plans.
+            return (
+                f"Error: Replacement in {file_path} produced no change. "
+                "Re-read the file and provide a fresh old_string."
+            )
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(new_content)
         return (
@@ -208,27 +254,43 @@ def file_write(file_path: str, content: str) -> str:
 
 @register_tool(
     name="glob",
-    description="Search for files using glob patterns. Returns a list of relative paths.",
+    description="Search for files using glob patterns relative to the workspace root (e.g. '**/*.py'). Absolute patterns are rejected.",
     input_schema=GlobInput,
     is_read_only=True,
 )
 def glob_tool(pattern: str) -> str:
-    """Find files matching a glob pattern."""
+    """Find files matching a glob pattern, anchored under WORKSPACE_ROOT.
+
+    Fail Fast: absolute patterns are rejected up-front rather than being walked
+    and silently filtered later, so the tool never enumerates paths outside
+    the workspace.
+    """
+    if not pattern:
+        return "Error: glob pattern must be non-empty."
+    if Path(pattern).is_absolute() or pattern.startswith(("/", "\\")):
+        return (
+            "Error: glob pattern must be relative to the workspace root. "
+            "Got an absolute path."
+        )
+
+    root = Path(WORKSPACE_ROOT).resolve()
     try:
-        matches = glob.glob(pattern, recursive=True)
-        if not matches:
-            return f"No files found matching pattern: {pattern}"
-        safe_matches = []
-        for m in matches:
-            try:
-                safe_matches.append(_validate_path(m))
-            except PermissionError:
-                continue
-        if not safe_matches:
-            return "No files found within the allowed workspace."
-        return "Found files:\n" + "\n".join(safe_matches)
-    except OSError as e:
+        candidates = list(root.glob(pattern))
+    except (OSError, ValueError) as e:
         return f"Error executing glob: {str(e)}"
+
+    safe_matches = []
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        try:
+            safe_matches.append(_validate_path(str(candidate)))
+        except PermissionError:
+            continue
+
+    if not safe_matches:
+        return f"No files found matching pattern: {pattern}"
+    return "Found files:\n" + "\n".join(safe_matches)
 
 
 @register_tool(
@@ -267,6 +329,9 @@ def list_directory(directory: str = ".") -> str:
         return f"Error listing directory: {str(e)}"
 
 
+SYMBOL_SEARCH_RESULT_LIMIT = 100
+
+
 @register_tool(
     name="symbol_search",
     description="Search for a specific code symbol (class or function) definition across the codebase.",
@@ -274,39 +339,48 @@ def list_directory(directory: str = ".") -> str:
     is_read_only=True,
 )
 def symbol_search(symbol: str) -> str:
-    """Find the definition of a class or function across the codebase (Python-native)."""
-    import re
-    import fnmatch
+    """Find the definition of a class or function across the codebase.
 
+    Prunes well-known build/cache directories (see EXCLUDED_DIRS) so os.walk
+    does not descend into them — without pruning, the previous implementation
+    walked the entire tree and only filtered after the fact.
+    """
+    if not symbol:
+        return "Error: symbol must be non-empty."
+
+    escaped = re.escape(symbol)
     patterns = [
-        f"def {symbol}\\b",
-        f"class {symbol}\\b",
-        f"function {symbol}\\b",
-        f"const {symbol}\\s*=",
-        f"let {symbol}\\s*=",
-        f"var {symbol}\\s*=",
+        rf"\bdef {escaped}\b",
+        rf"\bclass {escaped}\b",
+        rf"\bfunction {escaped}\b",
+        rf"\bconst {escaped}\s*=",
+        rf"\blet {escaped}\s*=",
+        rf"\bvar {escaped}\s*=",
     ]
     compiled_patterns = [re.compile(p) for p in patterns]
-    matches = []
+
+    matches: List[str] = []
     root_dir = str(WORKSPACE_ROOT)
-    for root, _, files in os.walk(root_dir):
-        if any(
-            (
-                fnmatch.fnmatch(root, f"*{exc}*")
-                for exc in ["__pycache__", "venv", ".git", "chroma_db"]
-            )
-        ):
-            continue
+    for current_root, dirs, files in os.walk(root_dir):
+        # Prune in-place so os.walk stops descending into excluded dirs.
+        dirs[:] = [d for d in dirs if d not in EXCLUDED_DIRS]
         for file in files:
-            file_path = os.path.join(root, file)
+            file_path = os.path.join(current_root, file)
             rel_path = os.path.relpath(file_path, root_dir)
             try:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    for i, line in enumerate(f, 1):
-                        if any((p.search(line) for p in compiled_patterns)):
-                            matches.append(f"{rel_path}:{i}:{line.strip()}")
+                    for line_no, line in enumerate(f, 1):
+                        if any(p.search(line) for p in compiled_patterns):
+                            matches.append(f"{rel_path}:{line_no}:{line.strip()}")
+                            if len(matches) >= SYMBOL_SEARCH_RESULT_LIMIT:
+                                return _format_symbol_matches(matches)
             except (OSError, IOError, UnicodeError):
                 continue
+
     if not matches:
         return f"Definition for '{symbol}' not found. Try a regular grep_search."
-    return "Potential Definitions:\n\n" + "\n".join(matches[:100])
+    return _format_symbol_matches(matches)
+
+
+def _format_symbol_matches(matches: List[str]) -> str:
+    return "Potential Definitions:\n\n" + "\n".join(matches)

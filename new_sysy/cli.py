@@ -2,10 +2,7 @@
 import sys
 import time
 
-# STARTUP PROFILER
-_start_time = time.perf_counter()
-
-# FAST-PATH DISPATCHER
+# FAST-PATH DISPATCHER — handle the trivial flags before touching heavy imports.
 if len(sys.argv) > 1:
     fast_cmd = sys.argv[1]
     if fast_cmd in ["--version", "-v"]:
@@ -17,23 +14,19 @@ if len(sys.argv) > 1:
         )
         sys.exit(0)
 
-# Check if Fast-Path is actually FAST (F-Profiler Gate)
-_fast_path_latency = (time.perf_counter() - _start_time) * 1000
-if _fast_path_latency > 50:
-    # Print a "Developer Warning" in the background
-    sys.stderr.write(
-        f"[BOOT_WARNING] Fast-path took {_fast_path_latency:.2f}ms. Check for heavy top-level imports.\n"
-    )
-
 import logging
 import argparse
 import os
-import re
 import threading
 
 # Lazy-loading pointers
 QueryEngine = None
 cleanup_active_processes = None
+
+# Idempotency guard: process-wide, not per-instance — atexit registration must
+# only happen once even if multiple AgentCLI instances are constructed
+# (e.g. by tests).
+_atexit_registered = False
 
 
 def get_console():
@@ -115,16 +108,18 @@ class AgentCLI:
 
     def _boot_engine(self):
         """Heavy lifting happens here in the background."""
-        global QueryEngine, cleanup_active_processes
+        global QueryEngine, cleanup_active_processes, _atexit_registered
         try:
-            import atexit
-
             if QueryEngine is None:
                 from query_engine import QueryEngine
             if cleanup_active_processes is None:
                 from tools import cleanup_active_processes
 
+            if not _atexit_registered:
+                import atexit
+
                 atexit.register(cleanup_active_processes)
+                _atexit_registered = True
 
             self.engine = QueryEngine(
                 model_id=self.model_id, permission_mode=self.permission_mode
@@ -138,6 +133,69 @@ class AgentCLI:
 
             self.boot_error = f"{str(e)}\n{traceback.format_exc()}"
             logging.exception("Engine Boot Failed:")
+
+    def _consume_stream_events(self, query, console):
+        """Drive one pass of the engine stream, rendering events to the console.
+
+        Returns the interrupt event dict if the engine asked for human input;
+        returns None when the stream finishes normally. The caller is
+        responsible for prompting the user and resuming.
+        """
+        active_status = None
+        has_printed_pipe = False
+
+        for event in self.engine.process_query_stream(
+            query, session_id=self.session_id, messages=self.history
+        ):
+            event_type = event["type"]
+
+            if event_type == "status":
+                content = event["content"]
+                icon = TOOL_ICON if "Executing" in content else THINK_ICON
+                status_msg = f"{INDENT}[pill.think] {icon} {content} [/]"
+                if active_status:
+                    active_status.update(status_msg)
+                else:
+                    active_status = console.status(status_msg)
+                    active_status.start()
+
+            elif event_type == "chunk":
+                if active_status:
+                    active_status.stop()
+                    active_status = None
+                if not has_printed_pipe:
+                    console.print(f"{PIPE}", end="")
+                    has_printed_pipe = True
+                content = event["content"]
+                console.print(content.replace("\n", f"\n{PIPE}"), end="")
+
+            elif event_type == "tombstone":
+                if active_status:
+                    active_status.stop()
+                    active_status = None
+                console.print(f"\n{INDENT}[warning] {event['content']} [/]")
+
+            elif event_type == "interrupt":
+                if active_status:
+                    active_status.stop()
+                return event
+
+            elif event_type == "done":
+                if active_status:
+                    active_status.stop()
+                    active_status = None
+                self.history = event["messages"]
+                console.print("\n")
+
+            elif event_type == "error":
+                if active_status:
+                    active_status.stop()
+                    active_status = None
+                console.print(
+                    f"\n{INDENT}[danger]Error: {event['content']}[/danger]"
+                )
+
+        return None
 
     def permission_callback(self, tool_name: str, tool_args: dict) -> bool:
         console = get_console()
@@ -212,8 +270,14 @@ class AgentCLI:
                     continue
                 if query.lower() in ["exit", "quit"]:
                     break
-                if query.lower() == "clear":
+                if query.lower() in ["clear", "/clear"]:
                     console.clear()
+                    if self.is_ready and self.engine:
+                        self.history = []
+                        self.engine.reset_session(self.session_id)
+                        console.print(
+                            f"{INDENT}[status]✨ Agent memory completely wiped.[/status]\n"
+                        )
                     continue
 
                 if query.startswith("/model "):
@@ -256,113 +320,61 @@ class AgentCLI:
                             console.print(f"{INDENT}[dim]{self.boot_error}[/dim]\n")
                             break  # Exit the loop and end the session
 
-                # --- AGENT TURN ---
-                def run_agent_turn(agent_query, history_msgs):
-                    console = get_console()
-                    from rich.panel import Panel
-                    from rich.box import ROUNDED
-                    from rich.align import Align
-                    from langchain_core.messages import ToolMessage
-
-                    full_answer = ""
-                    active_status = None
-                    has_printed_pipe = False
-                    interrupted_event = None
-
-                    for event in self.engine.process_query_stream(
-                        agent_query, session_id=self.session_id, messages=history_msgs
-                    ):
-                        if event["type"] == "status":
-                            content = event["content"]
-                            icon = TOOL_ICON if "Executing" in content else THINK_ICON
-                            status_msg = f"{INDENT}[pill.think] {icon} {content} [/]"
-                            if active_status:
-                                active_status.update(status_msg)
-                            else:
-                                active_status = console.status(status_msg)
-                                active_status.start()
-
-                        elif event["type"] == "chunk":
-                            if active_status:
-                                active_status.stop()
-                                active_status = None
-
-                            if not has_printed_pipe:
-                                console.print(f"{PIPE}", end="")
-                                has_printed_pipe = True
-
-                            content = event["content"]
-                            full_answer += content
-                            console.print(content.replace("\n", f"\n{PIPE}"), end="")
-
-                        elif event["type"] == "tombstone":
-                            if active_status:
-                                active_status.stop()
-                            console.print(f"\n{INDENT}[warning] {event['content']} [/]")
-
-                        elif event["type"] == "interrupt":
-                            if active_status:
-                                active_status.stop()
-                            interrupted_event = event
-                            break
-
-                        elif event["type"] == "done":
-                            if active_status:
-                                active_status.stop()
-                            self.history = event["messages"]
-                            console.print("\n")
-
-                        elif event["type"] == "error":
-                            if active_status:
-                                active_status.stop()
-                            console.print(
-                                f"\n{INDENT}[danger]Error: {event['content']}[/danger]"
-                            )
-
-                    if interrupted_event:
-                        question = interrupted_event["content"].replace(
-                            "[INTERRUPT_REQUIRED] The agent needs human input: ", ""
-                        )
-                        console.print("\n")
-                        console.print(
-                            Align.left(
-                                Panel(
-                                    f"[bold yellow]🙋 Question:[/bold yellow] {question}",
-                                    border_style="warning",
-                                    box=ROUNDED,
-                                    width=min(console.width - 4, 100),
-                                ),
-                                pad=True,
-                            )
-                        )
-
-                        answer = self.prompt_session.prompt(
-                            HTML(
-                                f"<b><ansiyellow>{USER_ICON} Answer</ansiyellow></b> > "
-                            ),
-                            style=self.pt_style,
-                        ).strip()
-
-                        self.history.append(
-                            ToolMessage(
-                                content=f"User replied: {answer}",
-                                tool_call_id=interrupted_event["tool_id"],
-                            )
-                        )
-                        console.print(
-                            f"\n{DOT} [agent]Agent[/agent] [dim](Resuming...)[/dim]\n"
-                        )
-                        return run_agent_turn(None, self.history)
-
-                    return full_answer
-
+                # --- AGENT TURN (iterative; one iteration per interrupt) ---
+                from rich.panel import Panel
+                from rich.box import ROUNDED
+                from rich.align import Align
                 from rich.rule import Rule
+                from langchain_core.messages import ToolMessage
 
                 console.print(Rule(style="agent"))
                 console.print(
                     f"\n{DOT} [agent]Agent[/agent] [model]({self.model_id})[/model]\n"
                 )
-                run_agent_turn(query, self.history)
+
+                pending_query = query
+                while True:
+                    interrupted_event = self._consume_stream_events(
+                        pending_query, console
+                    )
+                    if interrupted_event is None:
+                        break
+
+                    question = interrupted_event["content"].replace(
+                        "[INTERRUPT_REQUIRED] The agent needs human input: ", ""
+                    )
+                    console.print("\n")
+                    console.print(
+                        Align.left(
+                            Panel(
+                                f"[bold yellow]🙋 Question:[/bold yellow] {question}",
+                                border_style="warning",
+                                box=ROUNDED,
+                                width=min(console.width - 4, 100),
+                            ),
+                            pad=True,
+                        )
+                    )
+
+                    answer = self.prompt_session.prompt(
+                        HTML(
+                            f"<b><ansiyellow>{USER_ICON} Answer</ansiyellow></b> > "
+                        ),
+                        style=self.pt_style,
+                    ).strip()
+
+                    self.history.append(
+                        ToolMessage(
+                            content=f"User replied: {answer}",
+                            tool_call_id=interrupted_event["tool_id"],
+                        )
+                    )
+                    console.print(
+                        f"\n{DOT} [agent]Agent[/agent] [dim](Resuming...)[/dim]\n"
+                    )
+                    # Resume with no new query — the next stream is driven by
+                    # the appended ToolMessage in self.history.
+                    pending_query = None
 
                 # --- POST-TURN RENDERS ---
                 self.engine.journal.save_session(self.session_id, self.history)

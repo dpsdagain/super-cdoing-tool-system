@@ -1,7 +1,8 @@
 # pylint: disable=too-many-instance-attributes,too-many-arguments,too-many-locals,too-many-branches,too-many-statements
 import logging
 import os
-from typing import List, Any, Optional
+from collections import deque
+from typing import Any, Deque, List, Optional
 from dataclasses import dataclass, field
 from langchain_core.messages import (
     HumanMessage,
@@ -11,9 +12,11 @@ from config import (
     DEFAULT_MODEL,
     LLM_TEMPERATURE,
     SESSION_DIR,
-    ENABLE_PROMPT_CACHING,
-    ANTHROPIC_CACHE_BETA_HEADER,
 )
+
+# Bound on QueryState.executed_actions so it doesn't grow unbounded
+# across long sessions — only the recent window is needed for loop detection.
+ACTION_HISTORY_MAX = 64
 from context_manager import ContextManager
 from context_rules import ContextRules
 from llm_factory import ModelFactory
@@ -64,7 +67,8 @@ class QueryState:
         self.max_turns = max_turns
         self.recovery_count = 0
         self.has_attempted_reactive_compact = False
-        self.executed_actions: List[str] = []  # Detect repeating loops
+        # Bounded so .count() stays O(window) and memory doesn't grow forever.
+        self.executed_actions: Deque[str] = deque(maxlen=ACTION_HISTORY_MAX)
         self.is_terminal = False
 
 
@@ -112,11 +116,6 @@ class QueryEngine:
             session_dir=SESSION_DIR,
         )
         self.state = EngineState()
-
-        # Build extra headers for prompt caching if enabled
-        self.extra_headers = {}
-        if ENABLE_PROMPT_CACHING:
-            self.extra_headers["anthropic-beta"] = ANTHROPIC_CACHE_BETA_HEADER
 
         self.llm = ModelFactory.create_model(
             self.config.model_id, temperature=self.config.temperature
@@ -172,6 +171,50 @@ class QueryEngine:
         ]
         self.llm_with_tools = self.llm.bind_tools(self.tools_metadata)
 
+    def reset_session(self, session_id: str) -> None:
+        """Clear plan/scratchpad state and write an empty journal for `session_id`.
+
+        Called by the CLI's `/clear` command. Per-turn state lives on QueryState
+        and is rebuilt on the next process_query_stream call, so there is no
+        per-turn state to clear here.
+        """
+        self.state.current_plan = "No plan defined yet."
+        self.state.current_status = "Initializing..."
+        self.journal.save_session(session_id, [], append_only=False)
+
+    def _track_usage(self, response: Any) -> None:
+        """Record token usage for `response` if usage_metadata is present."""
+        usage_metadata = getattr(response, "usage_metadata", None)
+        if not usage_metadata:
+            return
+        self.usage_tracker.track(
+            self.config.model_id,
+            {
+                "input_tokens": usage_metadata.get("input_tokens", 0),
+                "output_tokens": usage_metadata.get("output_tokens", 0),
+                "cache_read_input_tokens": usage_metadata.get(
+                    "cache_read_input_tokens", 0
+                ),
+                "cache_creation_input_tokens": usage_metadata.get(
+                    "cache_creation_input_tokens", 0
+                ),
+            },
+        )
+
+    def _stream_with_tools(self, messages: List[Any]):
+        """Stream a tool-bound LLM response, yielding chunk events.
+
+        Yields {"type": "chunk", ...} events as they arrive and finally
+        {"type": "_aggregate", "response": <AIMessage>} so the caller can
+        attach the assembled message to history.
+        """
+        full_response = None
+        for chunk in self.llm_with_tools.stream(messages):
+            full_response = chunk if full_response is None else full_response + chunk
+            if chunk.content:
+                yield {"type": "chunk", "content": chunk.content}
+        yield {"type": "_aggregate", "response": full_response}
+
     def process_query(
         self, query: str, session_id: str = "default"
     ) -> tuple[str, List[Any]]:
@@ -186,17 +229,24 @@ class QueryEngine:
         return final_answer, last_messages
 
     def _apply_pre_query_grooming(self, messages: List[Any], plan: str) -> List[Any]:
-        """Surgically prunes context BEFORE every turn."""
+        """Surgically prunes context BEFORE every turn.
+
+        Replaces the leading SystemMessage with a fresh instance rather than
+        mutating its `content` in place — other holders of the original
+        message (the journal, callers' history) should observe the value at
+        the time of journaling, not the latest groomed version.
+        """
         memory_instructions = self.context_rules.get_instructions()
         messages = self.context_manager.compact(messages, plan=plan)
 
         system_instructions = (
             f"{RAG_SYSTEM_PROMPT}\n\n[MASTER_PLAN]\n{plan}\n\n{memory_instructions}"
         )
+        fresh_system = SystemMessage(content=system_instructions)
         if messages and isinstance(messages[0], SystemMessage):
-            messages[0].content = system_instructions
+            messages[0] = fresh_system
         else:
-            messages.insert(0, SystemMessage(content=system_instructions))
+            messages.insert(0, fresh_system)
         return messages
 
     def process_query_stream(
@@ -238,12 +288,16 @@ class QueryEngine:
             try:
                 for event in self._execute_tick(state, session_id):
                     yield event
-            except Exception as e:
+            except KeyboardInterrupt:
+                cleanup_active_processes()
+                raise
+            except Exception:
                 cleanup_active_processes()
                 orphans = state.messages[history_length_before_tick:]
                 if orphans:
                     logger.warning(
-                        f"Tombstone Action: Purging {len(orphans)} orphaned messages."
+                        "Tombstone Action: Purging %d orphaned messages.",
+                        len(orphans),
                     )
                     for msg in orphans:
                         yield {
@@ -251,9 +305,6 @@ class QueryEngine:
                             "content": f"Discarding orphaned message: {type(msg).__name__}",
                         }
                     state.messages = state.messages[:history_length_before_tick]
-
-                if isinstance(e, KeyboardInterrupt):
-                    raise e
                 logger.exception("Turn failure recovered:")
 
             state.turn_count += 1
@@ -278,10 +329,11 @@ class QueryEngine:
 
         # 1. Decision Layer
         planner_decision = self.planner.call_planner(
-            messages, state.turn_count, state.executed_actions
+            messages, state.turn_count, list(state.executed_actions)
         )
         action = planner_decision.get("action", "tool")
-        action_input = planner_decision.get("input", "")
+        # Coerce defensively — planners sometimes emit non-string `input`.
+        action_input = str(planner_decision.get("input", "") or "")
 
         action_sig = f"action:{action} input:{action_input[:40]}"
         if state.executed_actions.count(action_sig) >= 2:
@@ -329,17 +381,12 @@ class QueryEngine:
                 "content": f"Thinking: {planner_decision.get('reason', 'Processing...')}",
             }
             try:
-                response = self.llm_with_tools.invoke(messages)
-                state.messages.append(response)
-                self.journal.save_session(session_id, [response], append_only=True)
-
-                if not response.tool_calls:
-                    state.is_terminal = True
-                    action = "final"
-                else:
-                    yield from self.dispatcher.process_tool_calls(
-                        response.tool_calls, state, session_id
-                    )
+                response = None
+                for event in self._stream_with_tools(messages):
+                    if event["type"] == "_aggregate":
+                        response = event["response"]
+                    else:
+                        yield event
             except Exception as e:
                 if (
                     "context_length_exceeded" in str(e).lower()
@@ -355,62 +402,35 @@ class QueryEngine:
                     state.has_attempted_reactive_compact = True
                     state.turn_count -= 1
                     return
-                raise e
+                raise
 
-            if action == "tool" and not state.is_terminal:
-                yield {
-                    "type": "status",
-                    "content": f"Action: {planner_decision.get('reason', 'Executing Tool...')}",
-                }
-                nudge = SystemMessage(
-                    content="If external action is required, you MUST call a tool now."
-                )
-                full_response = None
-                for chunk in self.llm_with_tools.stream(state.messages + [nudge]):
-                    if full_response is None:
-                        full_response = chunk
-                    else:
-                        full_response += chunk
-                    if chunk.content:
-                        yield {"type": "chunk", "content": chunk.content}
+            state.messages.append(response)
+            self.journal.save_session(session_id, [response], append_only=True)
+            self._track_usage(response)
 
-                state.messages.append(full_response)
-                self.journal.save_session(session_id, [full_response], append_only=True)
+            if not response.tool_calls:
+                # Direct answer — terminate the turn. Content was already streamed
+                # as chunks above, so we only emit the terminal "done" event.
+                for hook in self.state.hooks:
+                    hook.on_turn_end(response.content)
+                state.is_terminal = True
+                yield {"type": "done", "messages": state.messages}
+                return
 
-                if (
-                    hasattr(full_response, "usage_metadata")
-                    and full_response.usage_metadata
-                ):
-                    u = full_response.usage_metadata
-                    self.usage_tracker.track(
-                        self.config.model_id,
-                        {
-                            "input_tokens": u.get("input_tokens", 0),
-                            "output_tokens": u.get("output_tokens", 0),
-                            "cache_read_input_tokens": u.get(
-                                "cache_read_input_tokens", 0
-                            ),
-                            "cache_creation_input_tokens": u.get(
-                                "cache_creation_input_tokens", 0
-                            ),
-                        },
-                    )
-
-                if not full_response.tool_calls:
-                    if state.turn_count > 1:
-                        action = "final"
-                    else:
-                        return
-
-                yield from self.dispatcher.process_tool_calls(
-                    full_response.tool_calls, state, session_id
-                )
+            yield from self.dispatcher.process_tool_calls(
+                response.tool_calls, state, session_id
+            )
+            # Tool results are now in state.messages. The outer while-loop runs
+            # the next tick, which re-invokes the planner + LLM with the new
+            # context to either call more tools or answer.
+            return
 
         if action == "final":
-            final_prompt = """You are finishing the task. Provide a clear final answer and summarize any changes."""
-            response = self.llm.invoke(
-                state.messages + [SystemMessage(content=final_prompt)]
-            )
+            # The Planner decided no tools are needed (e.g. casual math question).
+            response = self.llm.invoke(state.messages)
+            state.messages.append(response)
+            self.journal.save_session(session_id, [response], append_only=True)
+            self._track_usage(response)
             for hook in self.state.hooks:
                 hook.on_turn_end(response.content)
             state.is_terminal = True
@@ -418,4 +438,7 @@ class QueryEngine:
             yield {"type": "done", "messages": state.messages}
             return
 
-        yield {"type": "error", "content": f"Safety limit reached."}
+        yield {
+            "type": "error",
+            "content": f"Unknown planner action: {action!r}.",
+        }

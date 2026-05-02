@@ -64,26 +64,54 @@ def register_tool(
 
 
 def validate_path(path: str) -> str:
-    """Ensure the path is within the WORKSPACE_ROOT boundary and doesn't target sensitive files."""
+    """Ensure the path is within the WORKSPACE_ROOT boundary, is not a symlink,
+    and doesn't target sensitive files.
+
+    Only OSError is translated into PermissionError — other exceptions
+    (TypeError, ValueError) are real bugs and propagate so they can be fixed.
+    """
+    raw = Path(path)
+
+    # Reject symlinks before resolve(). Path.resolve() *follows* the link, so
+    # a workspace-internal symlink pointing outside the workspace would fail
+    # the boundary check — but a symlink whose target also lives inside the
+    # workspace would silently allow writes that traverse the link, which is
+    # rarely what the agent intends.
+    #
+    # We branch outside the try/except: PermissionError inherits from OSError,
+    # so wrapping the raise inside `except OSError` would double-wrap the
+    # message.
     try:
-        target = Path(path).resolve()
+        is_link = raw.is_symlink()
+    except OSError as e:
+        raise PermissionError(
+            f"Access Denied: Could not stat path '{path}': {e}"
+        ) from e
+
+    if is_link:
+        raise PermissionError(
+            f"Access Denied: '{path}' is a symbolic link; refusing to follow."
+        )
+
+    try:
+        target = raw.resolve()
         root = Path(WORKSPACE_ROOT).resolve()
+    except OSError as e:
+        raise PermissionError(
+            f"Access Denied: Could not resolve path '{path}': {e}"
+        ) from e
 
-        if not target.is_relative_to(root):
-            raise PermissionError(
-                f"Access Denied: Path '{target}' is outside the allowed workspace '{root}'."
-            )
+    if not target.is_relative_to(root):
+        raise PermissionError(
+            f"Access Denied: Path '{target}' is outside the allowed workspace '{root}'."
+        )
 
-        if any(p in FORBIDDEN_PATTERNS for p in target.parts):
-            raise PermissionError(
-                f"Access Denied: Path '{target}' contains forbidden components."
-            )
+    if any(p in FORBIDDEN_PATTERNS for p in target.parts):
+        raise PermissionError(
+            f"Access Denied: Path '{target}' contains forbidden components."
+        )
 
-        return str(target)
-    except Exception as e:
-        if isinstance(e, PermissionError):
-            raise e
-        raise PermissionError(f"Access Denied: Could not validate path '{path}'.")
+    return str(target)
 
 
 def build_available_tools() -> Dict[str, Any]:
